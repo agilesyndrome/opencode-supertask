@@ -5,6 +5,7 @@ import { db, getSqlite, schema } from '@core/db';
 import { eq, and, desc, asc, sql, isNull, or, type SQL } from 'drizzle-orm';
 import type { Task, NewTask, TaskStatus } from '@core/db/schema';
 import { computeBackoff } from '@core/backoff';
+import { validateRunWindow } from '@core/offpeak';
 import { validateTaskWorkingDirectory } from '@core/task-working-directory';
 import {
     normalizeTaskBatchId,
@@ -43,6 +44,8 @@ export interface EditableTaskUpdate {
 interface TaskQueueScope {
     cwd?: string;
     excludedBatchIds?: string[];
+    /** 调用方断言当前处于闲时。缺省/false 时按保守策略排除带窗口的任务（fail-closed）。 */
+    offPeakNow?: boolean;
 }
 
 export class TaskDeletionConflictError extends Error {
@@ -226,6 +229,7 @@ export class TaskService {
         if (!data.agent.trim()) throw new Error('agent 不能为空');
         if (!data.prompt.trim()) throw new Error('prompt 不能为空');
         validateTaskWorkingDirectory(data.cwd);
+        validateRunWindow(data.runWindow);
         this.validateInteger('importance', data.importance, 1, 5);
         this.validateInteger('urgency', data.urgency, 1, 5);
         this.validateInteger('maxRetries', data.maxRetries, 0, 1000);
@@ -285,6 +289,12 @@ export class TaskService {
         ];
         if (batchFilter) {
             conditions.push(batchFilter);
+        }
+
+        // 运行窗口闸门：offPeakNow !== true 时排除带窗口的任务（fail-closed），
+        // 使 next()/claimNext() 两条领取路径都无法在峰值时段绕过。
+        if (scope.offPeakNow !== true) {
+            conditions.push(isNull(tasks.runWindow));
         }
 
         return and(
@@ -909,6 +919,21 @@ export class TaskService {
             .get() ?? null, { behavior: 'immediate' });
     }
 
+    /** 清除运行窗口（run-now）：仅对未完成任务生效，让被闸住的任务立即可被领取。 */
+    static async clearRunWindow(id: number, scope: { cwd?: string } = {}): Promise<Task | null> {
+        const conditions = [
+            eq(tasks.id, id),
+            or(eq(tasks.status, 'pending'), eq(tasks.status, 'failed')),
+            ...this.buildScopeWhere(scope),
+        ];
+        return db.transaction((tx) => tx
+            .update(tasks)
+            .set({ runWindow: null })
+            .where(and(...conditions))
+            .returning()
+            .get() ?? null, { behavior: 'immediate' });
+    }
+
     static async retryBatch(batchId: string, scope: { cwd?: string } = {}): Promise<number> {
         const normalizedBatchId = normalizeTaskBatchId(batchId);
         if (!normalizedBatchId) return 0;
@@ -1076,6 +1101,17 @@ export class TaskService {
                 stats.total += Number(row.count);
             }
         }
+
+        const gated = await db
+            .select({ count: sql<number>`count(*)` })
+            .from(tasks)
+            .where(and(
+                eq(tasks.status, 'pending'),
+                sql`${tasks.runWindow} IS NOT NULL`,
+                ...conditions,
+            ))
+            .get();
+        stats.gatedPending = Number(gated?.count ?? 0);
 
         return stats;
     }

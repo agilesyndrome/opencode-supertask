@@ -28,6 +28,24 @@ describe('Dashboard 安全边界', () => {
     let testDb: ReturnType<typeof setupTestDb>;
     const maintenanceBackups: string[] = [];
 
+    test('任务列表为带窗口任务渲染徽标并支持 off-peak 搜索', async () => {
+        await TaskService.add({ name: '夜间故事', agent: 'build', prompt: 'p', runWindow: 'off-peak' });
+        await TaskService.add({ name: '白天故事', agent: 'build', prompt: 'p' });
+
+        const page = await (await dashboardApp.request('/', { headers: { 'accept-language': 'en' } })).text();
+        const badgeCount = page.match(/>Off-peak</g)?.length ?? 0;
+        expect(badgeCount).toBe(1);
+
+        const gatedRow = /data-search="([^"]*夜间故事[^"]*)"/.exec(page)?.[1] ?? '';
+        expect(gatedRow).toContain('off-peak');
+        const plainRow = /data-search="([^"]*白天故事[^"]*)"/.exec(page)?.[1] ?? '';
+        expect(plainRow).not.toContain('off-peak');
+
+        const zhPage = await (await dashboardApp.request('/', { headers: { cookie: 'supertask_locale=zh-CN' } })).text();
+        expect(zhPage).toContain('闲时');
+    });
+
+
     /** 反代场景用的最小 GatewayConfig：只关心 dashboard.extraHosts 的中间件行为。 */
     function gatewayConfigWithExtraHosts(extraHosts: string[]): GatewayConfig {
         return {
