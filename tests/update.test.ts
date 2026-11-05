@@ -100,12 +100,35 @@ describe('OpenCode 插件升级', () => {
     test('最终配置必须只有一个精确版本的 SuperTask 声明', () => {
         expect(resolveConfiguredPluginSpec({
             plugin: ['other-plugin', 'opencode-supertask@0.1.31'],
-        })).toEqual({ spec: 'opencode-supertask@0.1.31', version: '0.1.31', exact: true });
+        })).toEqual({ spec: 'opencode-supertask@0.1.31', version: '0.1.31', exact: true, localDir: null });
         expect(resolveConfiguredPluginSpec({ plugin: ['opencode-supertask@latest'] })).toEqual({
-            spec: 'opencode-supertask@latest', version: null, exact: false,
+            spec: 'opencode-supertask@latest', version: null, exact: false, localDir: null,
         });
         expect(() => resolveConfiguredPluginSpec({
             plugin: ['opencode-supertask@0.1.30', 'opencode-supertask@0.1.31'],
+        })).toThrow('包含多个');
+    });
+
+    test('指向本包的本地插件目录条目按本地检出对待', () => {
+        const dir = mkdtempSync(join(tmpdir(), 'supertask-local-plugin-'));
+        dirs.push(dir);
+        const packageDir = join(dir, 'stack', 'vendor', 'supertask');
+        writePlugin(packageDir, '0.1.41');
+        expect(resolveConfiguredPluginSpec({ plugin: ['other-plugin', packageDir] })).toEqual({
+            spec: packageDir, version: '0.1.41', exact: true, localDir: packageDir,
+        });
+        expect(resolveConfiguredPluginSpec({ plugin: [`file://${packageDir}`] })).toEqual({
+            spec: `file://${packageDir}`, version: '0.1.41', exact: true, localDir: packageDir,
+        });
+        // 名字不符、不是本包、路径不存在的条目都不算
+        const other = join(dir, 'other');
+        mkdirSync(other, { recursive: true });
+        writeFileSync(join(other, 'package.json'), JSON.stringify({ name: 'other-plugin', version: '1.0.0' }));
+        expect(() => resolveConfiguredPluginSpec({ plugin: [other] })).toThrow('未启用');
+        expect(() => resolveConfiguredPluginSpec({ plugin: [join(dir, 'missing')] })).toThrow('未启用');
+        // 本地目录与 npm 声明同时出现仍然算重复声明
+        expect(() => resolveConfiguredPluginSpec({
+            plugin: [packageDir, 'opencode-supertask@0.1.41'],
         })).toThrow('包含多个');
     });
 
@@ -132,6 +155,34 @@ process.exit(1);
             spec: 'opencode-supertask@0.1.31',
             version: '0.1.31',
             cachedVersion: '0.1.31',
+            packageDir,
+            error: null,
+        });
+    });
+
+    test('OpenCode 2.x 的本地插件目录条目诊断通过且无需 npm 缓存', () => {
+        const dir = mkdtempSync(join(tmpdir(), 'supertask-doctor-local-plugin-'));
+        dirs.push(dir);
+        const packageDir = join(dir, 'stack', 'vendor', 'supertask');
+        const fakeOpencode = join(dir, 'opencode');
+        writePlugin(packageDir, '0.1.41');
+        writeFileSync(fakeOpencode, `#!/usr/bin/env bun
+if (Bun.argv[2] === '--version') { console.log(process.env.FAKE_OPENCODE_VERSION ?? '2.0.24'); process.exit(0); }
+if (Bun.argv.slice(2).join(' ') === 'debug config') {
+  console.log(JSON.stringify([{ type: 'document', info: { plugins: [${JSON.stringify(packageDir)}] } }]));
+  process.exit(0);
+}
+process.exit(1);
+`);
+        chmodSync(fakeOpencode, 0o755);
+        process.env.SUPERTASK_OPENCODE_BIN = fakeOpencode;
+        process.env.FAKE_OPENCODE_VERSION = '2.0.24';
+
+        expect(getOpenCodePluginDiagnostic()).toMatchObject({
+            ok: true,
+            spec: packageDir,
+            version: '0.1.41',
+            cachedVersion: '0.1.41',
             packageDir,
             error: null,
         });
