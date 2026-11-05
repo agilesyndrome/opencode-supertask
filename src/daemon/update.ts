@@ -21,6 +21,7 @@ import {
 } from 'jsonc-parser';
 import { homedir, tmpdir } from 'os';
 import { dirname, join, resolve } from 'path';
+import { fileURLToPath } from 'url';
 import { compareSemanticVersions, isSemanticVersion } from '@core/semver';
 import { detectOpenCodeVersionSync, openCodeExecutable } from '@core/opencode-cli';
 
@@ -36,6 +37,8 @@ export interface ConfiguredPluginSpec {
     spec: string;
     version: string | null;
     exact: boolean;
+    /** 非 null 时条目是本地插件目录（OpenCode 2.x 支持本地路径），即该目录的绝对路径。 */
+    localDir: string | null;
 }
 
 export interface OpenCodePluginDiagnostic extends ConfiguredPluginSpec {
@@ -405,6 +408,29 @@ export function mergeOpenCodeV2PluginConfig(value: unknown): { plugin: string[] 
     return { plugin: merged };
 }
 
+/** 本地插件目录条目：绝对路径（或 file:// URL），且目录内 package.json 的 name 是本包。 */
+function localPluginDirectory(spec: string): string | null {
+    if (!spec.startsWith('/') && !spec.startsWith('file://')) return null;
+    let directory = spec;
+    if (spec.startsWith('file://')) {
+        try {
+            directory = fileURLToPath(spec);
+        } catch {
+            return null;
+        }
+    }
+    try {
+        const manifest = JSON.parse(readFileSync(join(directory, 'package.json'), 'utf8')) as {
+            name?: unknown;
+            version?: unknown;
+        };
+        if (manifest.name !== PACKAGE_NAME || typeof manifest.version !== 'string') return null;
+        return directory;
+    } catch {
+        return null;
+    }
+}
+
 export function resolveConfiguredPluginSpec(value: unknown): ConfiguredPluginSpec {
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
         throw new Error('[supertask] OpenCode 最终配置不是对象');
@@ -413,16 +439,35 @@ export function resolveConfiguredPluginSpec(value: unknown): ConfiguredPluginSpe
     if (!Array.isArray(plugins)) {
         throw new Error(`[supertask] OpenCode 最终配置未启用 ${PACKAGE_NAME}`);
     }
-    const matches = plugins.map(pluginEntrySpec)
-        .filter((spec): spec is string => spec !== null)
-        .filter((spec) => spec === PACKAGE_NAME || spec.startsWith(`${PACKAGE_NAME}@`));
-    if (matches.length === 0) {
+    const candidates = plugins.map(pluginEntrySpec)
+        .filter((spec): spec is string => spec !== null);
+    let match: { spec: string; localDir: string | null } | null = null;
+    for (const spec of candidates) {
+        const isNpmSpec = spec === PACKAGE_NAME || spec.startsWith(`${PACKAGE_NAME}@`);
+        const localDir = isNpmSpec ? null : localPluginDirectory(spec);
+        if (!isNpmSpec && localDir === null) continue;
+        if (match !== null) {
+            throw new Error(`[supertask] OpenCode 最终配置包含多个 ${PACKAGE_NAME} 声明: ${match.spec}, ${spec}`);
+        }
+        match = { spec, localDir };
+    }
+    if (match === null) {
         throw new Error(`[supertask] OpenCode 最终配置未启用 ${PACKAGE_NAME}`);
     }
-    if (matches.length !== 1) {
-        throw new Error(`[supertask] OpenCode 最终配置包含多个 ${PACKAGE_NAME} 声明: ${matches.join(', ')}`);
+    if (match.localDir !== null) {
+        // 本地检出的版本来自其 package.json，路径即安装位置，无需 npm 缓存。
+        const manifest = JSON.parse(readFileSync(join(match.localDir, 'package.json'), 'utf8')) as {
+            version?: unknown;
+        };
+        const version = typeof manifest.version === 'string' ? manifest.version : null;
+        return {
+            spec: match.spec,
+            version: version !== null && isSemanticVersion(version) ? version : null,
+            exact: version !== null && isSemanticVersion(version),
+            localDir: match.localDir,
+        };
     }
-    const spec = matches[0];
+    const spec = match.spec;
     const version = spec.startsWith(`${PACKAGE_NAME}@`)
         ? spec.slice(PACKAGE_NAME.length + 1)
         : null;
@@ -430,6 +475,7 @@ export function resolveConfiguredPluginSpec(value: unknown): ConfiguredPluginSpe
         spec,
         version: version !== null && isSemanticVersion(version) ? version : null,
         exact: version !== null && isSemanticVersion(version),
+        localDir: null,
     };
 }
 
@@ -439,6 +485,7 @@ export function getOpenCodePluginDiagnostic(): OpenCodePluginDiagnostic {
         spec: '',
         version: null,
         exact: false,
+        localDir: null,
         cachedVersion: null,
         packageDir: null,
         error: message,
@@ -492,6 +539,15 @@ export function getOpenCodePluginDiagnostic(): OpenCodePluginDiagnostic {
                 cachedVersion: null,
                 packageDir: null,
                 error: `[supertask] OpenCode 插件必须固定精确版本，不能使用 ${configured.spec}`,
+            };
+        }
+        if (configured.localDir !== null) {
+            return {
+                ok: true,
+                ...configured,
+                cachedVersion: configured.version,
+                packageDir: configured.localDir,
+                error: null,
             };
         }
         try {
