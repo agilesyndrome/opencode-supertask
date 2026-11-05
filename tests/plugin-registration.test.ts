@@ -6,6 +6,7 @@ import { join } from 'path';
 import SuperTaskDefault, { setupSuperTaskV2, shouldAttemptGatewayReplacement, SuperTaskPlugin, type V2PluginContext } from '../plugin/supertask';
 import { setupTestDb } from './helpers/mock-db';
 import { TaskService } from '../src/core/services/task.service';
+import { TaskTemplateService } from '../src/core/services/task-template.service';
 import { MANAGED_RUN_ENV, MANAGED_RUN_ENV_VALUE } from '../src/core/launch-protocol';
 
 const originalPm2Bin = process.env.SUPERTASK_PM2_BIN;
@@ -117,6 +118,18 @@ describe('OpenCode 插件注册', () => {
             expect(await TaskService.getById(added.id)).toMatchObject({ name: 'v2', cwd: directory });
             const invalid = JSON.parse((await tools.get('supertask_add')!({ name: '', agent: 'build', prompt: 'p' })).content) as { error?: string };
             expect(invalid.error).toBeTruthy();
+
+            const gated = JSON.parse((await tools.get('supertask_add')!({ name: '夜间任务', agent: 'build', prompt: 'p', run_window: 'off-peak' })).content) as { id: number; runWindow?: string | null };
+            expect(await TaskService.getById(gated.id)).toMatchObject({ runWindow: 'off-peak' });
+            expect(gated.runWindow).toBe('off-peak');
+            const badWindow = JSON.parse((await tools.get('supertask_add')!({ name: 'x', agent: 'build', prompt: 'p', run_window: 'always' })).content) as { error?: string };
+            expect(badWindow.error).toContain('run_window');
+
+            const scheduled = JSON.parse((await tools.get('supertask_schedule')!({
+                name: '夜间模板', agent: 'build', prompt: 'p', run_window: 'off-peak',
+                schedule: { type: 'recurring', interval: '1h' },
+            })).content) as { id: number };
+            expect((await TaskTemplateService.getById(scheduled.id))?.runWindow).toBe('off-peak');
         }
         expect(systems).toHaveLength(2);
         expect(systems[0][0]).toContain('supertask_schedule');

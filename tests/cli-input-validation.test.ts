@@ -97,3 +97,41 @@ describe('db check 退出语义', () => {
         }
     });
 });
+
+describe('CLI 运行窗口', () => {
+    test('add --run-window off-peak 持久化，非法值退出非零', () => {
+        const created = runJson<{ id: number }>([
+            'add', '-n', '夜间任务', '-a', 'build', '-p', 'p', '--run-window', 'off-peak',
+        ]);
+        const got = runJson<{ runWindow: string | null }>(['get', '--id', String(created.id)]);
+        expect(got.runWindow).toBe('off-peak');
+
+        const bad = runCommand(['add', '-n', 'x', '-a', 'build', '-p', 'p', '--run-window', 'always']);
+        expect(bad.status).not.toBe(0);
+        expect(bad.stderr).toContain('runWindow');
+    });
+
+    test('run-now 清除窗口；对已完成任务退出非零', () => {
+        const created = runJson<{ id: number }>([
+            'add', '-n', '待解锁', '-a', 'build', '-p', 'p', '--run-window', 'off-peak',
+        ]);
+        const cleared = runJson<{ runWindow: string | null }>(['run-now', '--id', String(created.id)]);
+        expect(cleared.runWindow).toBeNull();
+
+        const database = new Database(testDbPath);
+        database.exec(`UPDATE tasks SET status = 'done' WHERE id = ${created.id}`);
+        database.close();
+
+        const finished = runCommand(['run-now', '--id', String(created.id)]);
+        expect(finished.status).not.toBe(0);
+    });
+
+    test('template add --run-window 持久化到模板', () => {
+        const created = runJson<{ id: number }>([
+            'template', 'add', '-n', '夜间模板', '-a', 'build', '-p', 'p',
+            '-t', 'recurring', '--interval', '1h', '--run-window', 'off-peak',
+        ]);
+        const templates = runJson<Array<{ id: number; runWindow: string | null }>>(['template', 'list']);
+        expect(templates.find((template) => template.id === created.id)?.runWindow).toBe('off-peak');
+    });
+});

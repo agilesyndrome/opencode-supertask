@@ -37,6 +37,26 @@ describe('job-templates', () => {
             expect(task!.agent).toBe('reporter');
             expect(task!.templateId).toBe(tmpl.id);
             expect(task!.status).toBe('pending');
+            expect(task!.runWindow).toBeNull();
+        });
+
+        test('模板的 run_window 传递给生成的任务', async () => {
+            const gated = await TaskTemplateService.create({
+                name: '夜间模板', agent: 'build', prompt: 'p',
+                scheduleType: 'recurring', intervalMs: 60_000, runWindow: 'off-peak',
+            });
+            expect((await cloneTaskFromTemplate(gated.id))?.runWindow).toBe('off-peak');
+
+            expect(() => TaskTemplateService.create({
+                name: '非法窗口模板', agent: 'build', prompt: 'p',
+                scheduleType: 'recurring', intervalMs: 60_000, runWindow: 'always' as never,
+            })).toThrow("runWindow 只能是 'off-peak'");
+
+            const plain = await TaskTemplateService.create({
+                name: '普通模板', agent: 'build', prompt: 'p',
+                scheduleType: 'recurring', intervalMs: 60_000,
+            });
+            expect((await cloneTaskFromTemplate(plain.id))?.runWindow).toBeNull();
         });
 
         test('完整传递项目、批次、超时和重试配置', async () => {

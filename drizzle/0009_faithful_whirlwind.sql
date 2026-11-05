@@ -1,0 +1,1 @@
+ALTER TABLE `tasks` ADD `run_window` text;

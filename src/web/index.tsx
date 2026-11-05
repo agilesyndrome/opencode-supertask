@@ -726,11 +726,11 @@ app.get('/', async (c) => {
         const latestRun = latestRuns.get(task.id);
         const executionActive = latestRun?.status === 'running';
         const batchId = task.batchId?.trim() || null;
-        const searchable = esc(`${task.name} ${task.agent} ${task.model ?? ''} ${task.variant ?? ''} ${task.prompt} ${task.cwd ?? ''} ${task.batchId ?? ''} ${task.category ?? ''}`);
+        const searchable = esc(`${task.name} ${task.agent} ${task.model ?? ''} ${task.variant ?? ''} ${task.prompt} ${task.cwd ?? ''} ${task.batchId ?? ''} ${task.category ?? ''} ${task.runWindow ?? ''}`);
         return `<tr data-task-row data-search="${searchable}">
           <td class="faint" data-label="${t(locale, 'table.id')}">#${task.id}</td>
           <td data-primary data-label="${t(locale, 'table.task')}"><div class="task-name">${esc(task.name)}</div><div class="task-prompt" title="${esc(task.prompt)}">${esc(task.prompt.substring(0, 160))}</div>
-            <div class="actions task-context"><span class="tag" title="${esc(task.cwd ?? '')}">${esc(task.cwd ? (basename(task.cwd) || task.cwd) : t(locale, 'projects.legacy'))}</span>${batchId ? `<span class="tag" title="${esc(t(locale, 'template.batchId'))}">${esc(batchId)}</span>` : ''}</div></td>
+            <div class="actions task-context"><span class="tag" title="${esc(task.cwd ?? '')}">${esc(task.cwd ? (basename(task.cwd) || task.cwd) : t(locale, 'projects.legacy'))}</span>${batchId ? `<span class="tag" title="${esc(t(locale, 'template.batchId'))}">${esc(batchId)}</span>` : ''}${task.runWindow ? `<span class="tag" title="${esc(t(locale, 'task.runWindowHint'))}">${esc(t(locale, 'task.runWindow'))}</span>` : ''}</div></td>
           <td data-label="${t(locale, 'table.agent')}"><span class="tag">${esc(task.agent)}</span></td>
           <td data-label="${t(locale, 'table.status')}"><span class="badge b-${status}" ${status === 'dead_letter' ? `title="${esc(t(locale, 'status.deadLetterHint'))}"` : ''}>${statusText(locale, status)}</span>${status === 'dead_letter' ? `<div class="muted small" style="margin-top:5px">${t(locale, 'status.deadLetterAction')}</div>` : ''}${executionActive && status !== 'running' ? `<div class="muted small" style="margin-top:5px">${t(locale, 'status.executionStillActive')}</div>` : ''}</td>
           <td data-label="${t(locale, 'table.duration')}" class="small ${executionActive || task.status === 'running' ? '' : 'muted'}">${formatDuration(task.startedAt, task.finishedAt)}</td>

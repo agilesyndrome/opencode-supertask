@@ -1,5 +1,6 @@
 import { TaskService } from '@core/services/task.service';
 import { TaskRunService } from '@core/services/task-run.service';
+import { isOffPeakNow } from '@core/offpeak';
 import { spawn, type ChildProcess } from 'child_process';
 import type { GatewayConfig } from '@gateway/config';
 import type { Task } from '@core/db/schema';
@@ -100,6 +101,7 @@ export class WorkerEngine {
     private shutdownDeadlineMs: number | null = null;
     private settlementRetryWakeups = new Set<() => void>();
     private cfg: GatewayConfig['worker'];
+    private offPeak: GatewayConfig['scheduler']['offPeak'];
     private opencodeBin: string;
     private maxOutputChars: number;
     private settlementRetryDelaysMs: number[];
@@ -107,6 +109,7 @@ export class WorkerEngine {
 
     constructor(cfg: GatewayConfig, options: WorkerEngineOptions = {}) {
         this.cfg = cfg.worker;
+        this.offPeak = cfg.scheduler.offPeak;
         this.opencodeBin = options.opencodeBin ?? openCodeExecutable();
         this.maxOutputChars = options.maxOutputChars ?? DEFAULT_MAX_OUTPUT_CHARS;
         this.settlementRetryDelaysMs = options.settlementRetryDelaysMs ?? [250, 1_000, 4_000];
@@ -215,7 +218,10 @@ export class WorkerEngine {
 
             let task: Task | null;
             try {
-                task = await TaskService.claimNext({ excludedBatchIds: [...this.activeBatchIds] });
+                task = await TaskService.claimNext({
+                    excludedBatchIds: [...this.activeBatchIds],
+                    offPeakNow: isOffPeakNow(new Date(), this.offPeak),
+                });
             } catch (err) {
                 this.logError('task claim failed', err);
                 throw err;

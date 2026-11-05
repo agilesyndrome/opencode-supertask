@@ -258,6 +258,92 @@ describe('TaskService', () => {
         });
     });
 
+    describe('运行窗口闸门', () => {
+        test('峰值时段（offPeakNow 缺省或 false）不返回带窗口的任务，无窗口任务照常返回', async () => {
+            await TaskService.add({
+                name: '夜间故事', agent: 'build', prompt: 'p', runWindow: 'off-peak', urgency: 5,
+            });
+            await TaskService.add({
+                name: '即时任务', agent: 'build', prompt: 'p', urgency: 1,
+            });
+
+            expect((await TaskService.next())?.name).toBe('即时任务');
+            expect((await TaskService.next({ offPeakNow: false }))?.name).toBe('即时任务');
+            expect((await TaskService.next({ offPeakNow: true }))?.name).toBe('夜间故事');
+        });
+
+        test('claimNext 同样受闸门约束：闲时才领取带窗口任务', async () => {
+            await TaskService.add({
+                name: '夜间任务', agent: 'build', prompt: 'p', runWindow: 'off-peak',
+            });
+
+            expect(await TaskService.claimNext({ offPeakNow: false })).toBeNull();
+            const claimed = await TaskService.claimNext({ offPeakNow: true });
+            expect(claimed).toMatchObject({ name: '夜间任务', status: 'running', runWindow: 'off-peak' });
+        });
+
+        test('带窗口且在重试预算内的 failed 任务在闲时可重新被领取', async () => {
+            const task = await TaskService.add({
+                name: '夜间重试', agent: 'build', prompt: 'p', runWindow: 'off-peak', maxRetries: 2, retryBackoffMs: 0,
+            });
+            await TaskService.claimNext({ offPeakNow: true });
+            await TaskService.fail(task.id, 'boom');
+
+            expect(await TaskService.next({ offPeakNow: false })).toBeNull();
+            expect((await TaskService.next({ offPeakNow: true }))?.id).toBe(task.id);
+        });
+
+        test('峰值时段带窗口的高紧急度任务不会挤掉无窗口任务', async () => {
+            await TaskService.add({
+                name: '夜间高紧急', agent: 'build', prompt: 'p', runWindow: 'off-peak', urgency: 5,
+            });
+            await TaskService.add({
+                name: '白天低紧急', agent: 'build', prompt: 'p', urgency: 1,
+            });
+            expect((await TaskService.claimNext({ offPeakNow: false }))?.name).toBe('白天低紧急');
+        });
+
+        test('add 校验 runWindow 闭集并持久化合法值', async () => {
+            expect(() => TaskService.add({
+                name: '非法窗口', agent: 'build', prompt: 'p', runWindow: 'always' as never,
+            })).toThrow("runWindow 只能是 'off-peak'");
+
+            const task = await TaskService.add({
+                name: '合法窗口', agent: 'build', prompt: 'p', runWindow: 'off-peak',
+            });
+            expect(task.runWindow).toBe('off-peak');
+            const plain = await TaskService.add({ name: '无窗口', agent: 'build', prompt: 'p' });
+            expect(plain.runWindow).toBeNull();
+        });
+
+        test('clearRunWindow 只清除未完成任务的窗口', async () => {
+            const task = await TaskService.add({
+                name: '待解锁', agent: 'build', prompt: 'p', runWindow: 'off-peak',
+            });
+            expect((await TaskService.clearRunWindow(task.id))?.runWindow).toBeNull();
+
+            const finished = await TaskService.add({
+                name: '已结束', agent: 'build', prompt: 'p', runWindow: 'off-peak',
+            });
+            await TaskService.start(finished.id);
+            await TaskService.done(finished.id, 'ok');
+            expect(await TaskService.clearRunWindow(finished.id)).toBeNull();
+        });
+
+        test('stats.gatedPending 统计待执行的带窗口任务', async () => {
+            await TaskService.add({ name: 'g1', agent: 'build', prompt: 'p', runWindow: 'off-peak' });
+            await TaskService.add({ name: 'g2', agent: 'build', prompt: 'p', runWindow: 'off-peak' });
+            await TaskService.add({ name: 'u1', agent: 'build', prompt: 'p' });
+            const running = await TaskService.add({ name: 'g3', agent: 'build', prompt: 'p', runWindow: 'off-peak' });
+            await TaskService.start(running.id);
+
+            const stats = await TaskService.stats();
+            expect(stats.gatedPending).toBe(2);
+            expect(stats.running).toBe(1);
+            expect((await TaskService.getById(running.id))?.runWindow).toBe('off-peak');
+        });
+    });
+
     describe('next', () => {
         test('claimNext 原子选择任务并返回已抢占的最新记录', async () => {
             const task = await TaskService.add({

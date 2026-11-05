@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
+import { DEFAULT_OFFPEAK_CONFIG, validateOffPeakConfig, type OffPeakConfig } from '@core/offpeak';
 
 export interface GatewayConfig {
     configVersion: 2;
@@ -14,6 +15,7 @@ export interface GatewayConfig {
     scheduler: {
         enabled: boolean;
         checkIntervalMs: number;
+        offPeak: OffPeakConfig;
     };
     watchdog: {
         heartbeatTimeoutMs: number;
@@ -41,6 +43,7 @@ const DEFAULT_CONFIG: GatewayConfig = {
     scheduler: {
         enabled: true,
         checkIntervalMs: 1000,
+        offPeak: DEFAULT_OFFPEAK_CONFIG,
     },
     watchdog: {
         heartbeatTimeoutMs: 600_000,
@@ -172,6 +175,7 @@ export function validateConfig(input: unknown): GatewayConfig {
         scheduler: {
             enabled: booleanAt(scheduler, 'enabled', DEFAULT_CONFIG.scheduler.enabled, 'scheduler'),
             checkIntervalMs: integerAt(scheduler, 'checkIntervalMs', DEFAULT_CONFIG.scheduler.checkIntervalMs, ...CONFIG_BOUNDS.schedulerCheckIntervalMs, 'scheduler'),
+            offPeak: validateOffPeakConfig(scheduler.offPeak),
         },
         watchdog: {
             heartbeatTimeoutMs,
