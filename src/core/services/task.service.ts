@@ -934,6 +934,19 @@ export class TaskService {
             .get() ?? null, { behavior: 'immediate' });
     }
 
+    /** 自 cutoff（含）以来完成的任务数——夜间计划的“晨报产出”指标。 */
+    static async countDoneSince(cutoff: Date): Promise<number> {
+        const row = await db
+            .select({ count: sql<number>`count(*)` })
+            .from(tasks)
+            .where(and(
+                eq(tasks.status, 'done'),
+                sql`${tasks.finishedAt} >= ${Math.floor(cutoff.getTime() / 1000)}`,
+            ))
+            .get();
+        return Number(row?.count ?? 0);
+    }
+
     static async retryBatch(batchId: string, scope: { cwd?: string } = {}): Promise<number> {
         const normalizedBatchId = normalizeTaskBatchId(batchId);
         if (!normalizedBatchId) return 0;

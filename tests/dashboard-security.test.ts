@@ -45,6 +45,55 @@ describe('Dashboard 安全边界', () => {
         expect(zhPage).toContain('闲时');
     });
 
+    test('run-now 接口清除窗口；跨站请求被拒绝；已完成任务返回 409', async () => {
+        const task = await TaskService.add({ name: '待解锁', agent: 'build', prompt: 'p', runWindow: 'off-peak' });
+
+        const evil = await dashboardApp.request(`/api/tasks/${task.id}/run-now`, {
+            method: 'POST', headers: { origin: 'https://evil.example' },
+        });
+        expect(evil.status).toBe(403);
+
+        const ok = await dashboardApp.request(`/api/tasks/${task.id}/run-now`, { method: 'POST' });
+        expect(ok.status).toBe(200);
+        expect((await TaskService.getById(task.id))?.runWindow).toBeNull();
+
+        await TaskService.start(task.id);
+        await TaskService.done(task.id, 'ok');
+        const finished = await dashboardApp.request(`/api/tasks/${task.id}/run-now`, { method: 'POST' });
+        expect(finished.status).toBe(409);
+
+        const missing = await dashboardApp.request('/api/tasks/999999/run-now', { method: 'POST' });
+        expect(missing.status).toBe(404);
+    });
+
+    test('run-now 按钮只为带窗口的 pending/failed 任务渲染', async () => {
+        await TaskService.add({ name: '闸门中', agent: 'build', prompt: 'p', runWindow: 'off-peak' });
+        await TaskService.add({ name: '无窗口', agent: 'build', prompt: 'p' });
+
+        const page = await (await dashboardApp.request('/', { headers: { 'accept-language': 'en' } })).text();
+        expect(page.match(/Run now</g)?.length ?? 0).toBe(1);
+    });
+
+    test('countDoneSince 统计最近一次 06:00 以来的完成数', async () => {
+        const done1 = await TaskService.add({ name: '夜间一', agent: 'build', prompt: 'p' });
+        const done2 = await TaskService.add({ name: '夜间二', agent: 'build', prompt: 'p' });
+        const stale = await TaskService.add({ name: '昨天', agent: 'build', prompt: 'p' });
+        for (const task of [done1, done2, stale]) {
+            await TaskService.start(task.id);
+            await TaskService.done(task.id, 'ok');
+        }
+        // 把 stale 的完成时间拨回到 25 小时前，必定早于最近一次 06:00
+        testDb.sqlite.exec(
+            `UPDATE tasks SET finished_at = ${Math.floor(Date.now() / 1000) - 25 * 3600} WHERE id = ${stale.id}`,
+        );
+
+        const now = new Date();
+        const morning = new Date(now);
+        morning.setHours(6, 0, 0, 0);
+        if (morning.getTime() > now.getTime()) morning.setDate(morning.getDate() - 1);
+        expect(await TaskService.countDoneSince(morning)).toBe(2);
+    });
+
 
     /** 反代场景用的最小 GatewayConfig：只关心 dashboard.extraHosts 的中间件行为。 */
     function gatewayConfigWithExtraHosts(extraHosts: string[]): GatewayConfig {
