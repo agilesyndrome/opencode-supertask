@@ -23,6 +23,7 @@ const ZH = {
     'action.details': '详情',
     'action.retry': '重试',
     'action.cancel': '取消',
+    'action.runNow': '立即运行',
     'action.delete': '删除',
     'action.edit': '编辑',
     'action.enable': '启用',
@@ -68,6 +69,7 @@ const ZH = {
     'stats.pending': '待执行',
     'stats.running': '运行中',
     'stats.done': '已完成',
+    'stats.doneSinceMorning': '06:00 起已完成',
     'stats.failedDead': '等待重试与已停止',
     'stats.templates': '定时任务总数',
     'stats.enabled': '已启用',
@@ -292,6 +294,7 @@ const ZH = {
     'dialog.restartGatewayRunningBody': '当前有 {count} 个任务在运行。系统会先等待它们完成；超时后，未完成任务会被安全停止并放回队列，然后 Gateway 由 PM2 自动恢复。',
     'feedback.retryFailed': '重试失败',
     'feedback.cancelFailed': '取消失败',
+    'feedback.runNowFailed': '立即运行失败',
     'feedback.deleteFailed': '删除失败',
     'feedback.requestFailed': '请求失败',
     'feedback.triggered': '已创建任务 #{id}',
@@ -336,6 +339,7 @@ const EN: Record<MessageKey, string> = {
     'action.details': 'Details',
     'action.retry': 'Retry',
     'action.cancel': 'Cancel',
+    'action.runNow': 'Run now',
     'action.delete': 'Delete',
     'action.edit': 'Edit',
     'action.enable': 'Enable',
@@ -381,6 +385,7 @@ const EN: Record<MessageKey, string> = {
     'stats.pending': 'Pending',
     'stats.running': 'Running',
     'stats.done': 'Completed',
+    'stats.doneSinceMorning': 'Done since 06:00',
     'stats.failedDead': 'Waiting to retry & stopped',
     'stats.templates': 'Scheduled tasks',
     'stats.enabled': 'Enabled',
@@ -605,6 +610,7 @@ const EN: Record<MessageKey, string> = {
     'dialog.restartGatewayRunningBody': '{count} tasks are running. The system waits for them first; after the grace period, unfinished tasks are stopped safely and returned to the queue before PM2 restores Gateway.',
     'feedback.retryFailed': 'Retry failed',
     'feedback.cancelFailed': 'Cancellation failed',
+    'feedback.runNowFailed': 'Run now failed',
     'feedback.deleteFailed': 'Delete failed',
     'feedback.requestFailed': 'Request failed',
     'feedback.triggered': 'Task #{id} created',
@@ -1113,6 +1119,7 @@ function clientMessages(locale: Locale) {
         'dialog.clearTitle', 'dialog.clearBody', 'dialog.clearInstruction', 'dialog.restartGateway',
         'dialog.restartGatewayBody', 'dialog.restartGatewayRunningBody', 'feedback.retryFailed',
         'feedback.cancelFailed', 'feedback.deleteFailed', 'feedback.requestFailed', 'feedback.triggered',
+        'feedback.runNowFailed', 'action.runNow', 'stats.doneSinceMorning', 'task.runWindow', 'task.runWindowHint',
         'feedback.taskCreated', 'feedback.taskUpdated', 'task.projectExisting', 'task.projectNew',
         'task.createTitle', 'task.editTitle', 'action.saveTask', 'action.updateTask',
         'feedback.configSaved', 'feedback.databaseCleared', 'feedback.templateCreated',
@@ -1237,6 +1244,7 @@ export function renderLayout(options: {
     async function askDanger(){const dialog=document.getElementById('danger-dialog');const input=document.getElementById('danger-confirmation');input.value='';document.getElementById('danger-ok').disabled=true;return new Promise(resolve=>{dialog.addEventListener('close',()=>resolve(dialog.returnValue==='confirm'),{once:true});dialog.showModal();setTimeout(()=>input.focus(),50);});}
     async function retryTask(id){if(!await ask(text('dialog.retryTask',{id}),text('dialog.retryTaskBody')))return;try{await readJson(await fetch('/api/tasks/'+id+'/retry',{method:'POST'}));location.reload()}catch(error){showToast(text('feedback.retryFailed')+': '+error.message,'error')}}
     async function cancelTask(id){if(!await ask(text('dialog.cancelTask',{id}),text('dialog.cancelTaskBody'),true))return;try{await readJson(await fetch('/api/tasks/'+id+'/cancel',{method:'POST'}));location.reload()}catch(error){showToast(text('feedback.cancelFailed')+': '+error.message,'error')}}
+    async function runNowTask(id){try{await readJson(await fetch('/api/tasks/'+id+'/run-now',{method:'POST'}));location.reload()}catch(error){showToast(text('feedback.runNowFailed')+': '+error.message,'error')}}
     async function deleteTask(id){if(!await ask(text('dialog.deleteTask',{id}),text('dialog.deleteTaskBody'),true))return;try{await readJson(await fetch('/api/tasks/'+id,{method:'DELETE'}));location.reload()}catch(error){showToast(text('feedback.deleteFailed')+': '+error.message,'error')}}
     function detailDate(value){if(value===null||value===undefined||value==='')return text('details.none');const epoch=typeof value==='number'&&value<100000000000?value*1000:value;const date=new Date(epoch);return Number.isNaN(date.getTime())?String(value):date.toLocaleString(document.documentElement.lang)}
     function detailDuration(value){if(value===null||value===undefined)return text('details.default');const milliseconds=Number(value);if(!Number.isFinite(milliseconds))return String(value);if(milliseconds===0)return '0 ms';const units=[[86400000,text('duration.days')],[3600000,text('duration.hours')],[60000,text('duration.minutes')],[1000,text('duration.seconds')]];for(const [size,label] of units){if(milliseconds>=size&&milliseconds%size===0)return String(milliseconds/size)+' '+label}return String(milliseconds)+' ms'}

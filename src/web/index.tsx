@@ -687,7 +687,14 @@ app.get('/', async (c) => {
         done: statsData.done || 0,
         failed: (statsData.failed || 0) + (statsData.dead_letter || 0),
         total: statsData.total || 0,
+        doneSinceMorning: 0,
     };
+    // 夜间产出：最近一次 06:00（宿主机本地时间）以来完成的任务数
+    const nowDate = new Date();
+    const morning = new Date(nowDate);
+    morning.setHours(6, 0, 0, 0);
+    if (morning.getTime() > nowDate.getTime()) morning.setDate(morning.getDate() - 1);
+    counts.doneSinceMorning = await TaskService.countDoneSince(morning);
     const filteredTotal = parsedStatus === 'running'
         ? selectedRunning
         : parsedStatus ? Number(statsData[parsedStatus] ?? 0) : counts.total;
@@ -740,6 +747,7 @@ app.get('/', async (c) => {
             <button type="button" class="btn" onclick="showDetail(${task.id})">${t(locale, 'action.details')}</button>
             ${isValidSessionId(latestRun?.sessionId) ? `<button type="button" class="btn" onclick="copySessionCommand(${latestRun.id})">${icon('copy')}${t(locale, 'action.continueSession')}</button>` : ''}
             ${task.status === 'failed' || task.status === 'dead_letter' ? `<button type="button" class="btn btn-warning" onclick="retryTask(${task.id})">${t(locale, 'action.retry')}</button>` : ''}
+            ${task.runWindow && ['pending', 'failed'].includes(task.status ?? '') ? `<button type="button" class="btn" onclick="runNowTask(${task.id})">${t(locale, 'action.runNow')}</button>` : ''}
             ${['pending', 'running', 'failed'].includes(task.status ?? '') ? `<button type="button" class="btn btn-warning" onclick="cancelTask(${task.id})">${t(locale, 'action.cancel')}</button>` : ''}
             ${task.status === 'running' || executionActive ? '' : `<button type="button" class="btn btn-danger" onclick="deleteTask(${task.id})">${t(locale, 'action.delete')}</button>`}
           </div></td>
@@ -785,6 +793,7 @@ app.get('/', async (c) => {
         ${statCard(counts.running, t(locale, 'stats.running'), 'tone-blue', icon('activity'), 'reveal-delay-1')}
         ${statCard(counts.done, t(locale, 'stats.done'), 'tone-green', icon('check'), 'reveal-delay-1')}
         ${statCard(counts.failed, t(locale, 'stats.failedDead'), 'tone-red', icon('alert'), 'reveal-delay-2')}
+        ${statCard(counts.doneSinceMorning, t(locale, 'stats.doneSinceMorning'), 'tone-purple', icon('templates'), 'reveal-delay-2')}
       </div>
       <section class="panel project-panel reveal reveal-delay-1">
         <div class="panel-head"><div><h2>${t(locale, 'projects.title')}</h2><p>${t(locale, 'projects.description')}</p></div><button type="button" class="btn btn-primary" onclick="openTaskCreator()">${t(locale, 'action.createTask')}</button></div>
@@ -1188,6 +1197,16 @@ app.post('/api/tasks/:id/cancel', async (c) => {
     if (task) return c.json({ success: true });
     return await TaskService.getById(id)
         ? c.json({ error: 'task status does not allow cancellation' }, 409)
+        : c.json({ error: 'not found' }, 404);
+});
+
+app.post('/api/tasks/:id/run-now', async (c) => {
+    const id = parsePositiveInteger(c.req.param('id'));
+    if (id === null) return c.json({ error: 'invalid id' }, 400);
+    const task = await TaskService.clearRunWindow(id);
+    if (task) return c.json({ success: true, runWindow: task.runWindow ?? null });
+    return await TaskService.getById(id)
+        ? c.json({ error: 'task status does not allow run-now' }, 409)
         : c.json({ error: 'not found' }, 404);
 });
 
