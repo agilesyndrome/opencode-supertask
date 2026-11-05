@@ -63,6 +63,17 @@ describe('Gateway 配置', () => {
         })).toThrow('heartbeatIntervalMs');
     });
 
+    test('dashboard.extraHosts 归一化为主机名列表并拒绝无效值', () => {
+        const config = validateConfig({
+            dashboard: { extraHosts: ['Supertask.Example.', 'a.b:8443', 'supertask.example'] },
+        });
+        expect(config.dashboard.extraHosts).toEqual(['supertask.example', 'a.b']);
+        expect(validateConfig({}).dashboard.extraHosts).toEqual([]);
+        expect(() => validateConfig({ dashboard: { extraHosts: 'supertask.example' } })).toThrow('必须是字符串数组');
+        expect(() => validateConfig({ dashboard: { extraHosts: ['bad host!'] } })).toThrow('无效主机名');
+        expect(() => validateConfig({ dashboard: { extraHosts: Array.from({ length: 17 }, (_, i) => `h${i}.example`) } })).toThrow('最多 16 个');
+    });
+
     test('配置文件损坏时明确报错，不静默回退默认值', () => {
         const path = configFile('{broken');
         expect(() => loadConfig(path)).toThrow(`无法读取配置 ${path}`);

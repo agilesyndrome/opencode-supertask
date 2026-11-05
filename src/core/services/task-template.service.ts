@@ -3,6 +3,7 @@ import { and, eq, desc, sql } from 'drizzle-orm';
 import type { TaskTemplate, NewTaskTemplate, ScheduleType } from '@core/db/schema';
 import { getNextCronRun, isValidCronExpr } from '@core/cron-parser';
 import { validateTaskWorkingDirectory } from '@core/task-working-directory';
+import { validateRunWindow } from '@core/offpeak';
 import { normalizeTaskBatchId } from '@core/task-batch';
 import { normalizeModelVariant } from '@core/model-variant';
 
@@ -44,6 +45,7 @@ export class TaskTemplateService {
         if (!data.agent.trim()) throw new Error('agent 不能为空');
         if (!data.prompt.trim()) throw new Error('prompt 不能为空');
         validateTaskWorkingDirectory(data.cwd);
+        validateRunWindow(data.runWindow);
 
         const scheduleType = data.scheduleType as ScheduleType;
         if (!['cron', 'delayed', 'recurring'].includes(scheduleType)) {

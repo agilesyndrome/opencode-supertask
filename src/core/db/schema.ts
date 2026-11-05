@@ -23,6 +23,9 @@ export const tasks = sqliteTable('tasks', {
     batchId: text('batch_id'),
     dependsOn: integer('depends_on'),
 
+    // 运行窗口（null = 任意时间；'off-peak' = 仅在配置的闲时窗口内被领取）
+    runWindow: text('run_window'),
+
     // 状态
     status: text('status').default('pending'),
 
@@ -106,6 +109,7 @@ export const taskTemplates = sqliteTable('task_templates', {
     importance: integer('importance').default(3),
     urgency: integer('urgency').default(3),
     batchId: text('batch_id'),
+    runWindow: text('run_window'),
 
     scheduleType: text('schedule_type').notNull(),
     cronExpr: text('cron_expr'),

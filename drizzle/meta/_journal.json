@@ -64,6 +64,20 @@
       "when": 1784419767211,
       "tag": "0008_good_smasher",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1793909098833,
+      "tag": "0009_faithful_whirlwind",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1793909439874,
+      "tag": "0010_heavy_susan_delgado",
+      "breakpoints": true
     }
   ]
 }

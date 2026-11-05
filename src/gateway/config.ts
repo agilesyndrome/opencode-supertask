@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
+import { DEFAULT_OFFPEAK_CONFIG, validateOffPeakConfig, type OffPeakConfig } from '@core/offpeak';
 
 export interface GatewayConfig {
     configVersion: 2;
@@ -14,6 +15,7 @@ export interface GatewayConfig {
     scheduler: {
         enabled: boolean;
         checkIntervalMs: number;
+        offPeak: OffPeakConfig;
     };
     watchdog: {
         heartbeatTimeoutMs: number;
@@ -24,6 +26,8 @@ export interface GatewayConfig {
     dashboard: {
         enabled: boolean;
         port: number;
+        /** 允许出现在 Host 里的额外主机名（反代场景）；小写、不带端口。 */
+        extraHosts: string[];
     };
 }
 
@@ -39,6 +43,7 @@ const DEFAULT_CONFIG: GatewayConfig = {
     scheduler: {
         enabled: true,
         checkIntervalMs: 1000,
+        offPeak: DEFAULT_OFFPEAK_CONFIG,
     },
     watchdog: {
         heartbeatTimeoutMs: 600_000,
@@ -49,6 +54,7 @@ const DEFAULT_CONFIG: GatewayConfig = {
     dashboard: {
         enabled: true,
         port: 4680,
+        extraHosts: [],
     },
 };
 
@@ -82,13 +88,30 @@ function integerAt(
     return value;
 }
 
+/** dashboard.extraHosts：可选字符串数组；小写、去尾点、去端口后仍须是合法主机名。 */
+function dashboardExtraHostsAt(source: Record<string, unknown>, key: string): string[] {
+    const value = source[key];
+    if (value === undefined) return DEFAULT_CONFIG.dashboard.extraHosts;
+    if (!Array.isArray(value)) throw new Error(`dashboard.${key} 必须是字符串数组`);
+    if (value.length > 16) throw new Error(`dashboard.${key} 最多 16 个条目`);
+    const hosts: string[] = [];
+    for (const item of value) {
+        if (typeof item !== 'string') throw new Error(`dashboard.${key} 必须是字符串数组`);
+        const host = item.trim().toLowerCase().replace(/\.+$/, '').replace(/:\d+$/, '');
+        if (!/^[a-z0-9](?:[a-z0-9._-]{0,251}[a-z0-9])?$/.test(host)) {
+            throw new Error(`dashboard.${key} 含无效主机名: ${item}`);
+        }
+        if (!hosts.includes(host)) hosts.push(host);
+    }
+    return hosts;
+}
+
 function booleanAt(
     source: Record<string, unknown>,
     key: string,
     fallback: boolean,
     path: string,
-): boolean {
-    const value = source[key];
+): boolean {    const value = source[key];
     if (value === undefined) return fallback;
     if (typeof value !== 'boolean') throw new Error(`${path}.${key} 必须是布尔值`);
     return value;
@@ -152,6 +175,7 @@ export function validateConfig(input: unknown): GatewayConfig {
         scheduler: {
             enabled: booleanAt(scheduler, 'enabled', DEFAULT_CONFIG.scheduler.enabled, 'scheduler'),
             checkIntervalMs: integerAt(scheduler, 'checkIntervalMs', DEFAULT_CONFIG.scheduler.checkIntervalMs, ...CONFIG_BOUNDS.schedulerCheckIntervalMs, 'scheduler'),
+            offPeak: validateOffPeakConfig(scheduler.offPeak),
         },
         watchdog: {
             heartbeatTimeoutMs,
@@ -162,6 +186,7 @@ export function validateConfig(input: unknown): GatewayConfig {
         dashboard: {
             enabled: booleanAt(dashboard, 'enabled', DEFAULT_CONFIG.dashboard.enabled, 'dashboard'),
             port: integerAt(dashboard, 'port', DEFAULT_CONFIG.dashboard.port, 1, 65_535, 'dashboard'),
+            extraHosts: dashboardExtraHostsAt(dashboard, 'extraHosts'),
         },
     };
 }

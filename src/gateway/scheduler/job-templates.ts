@@ -110,6 +110,7 @@ function createTaskFromTemplate(
                 importance: tmpl.importance ?? 3,
                 urgency: tmpl.urgency ?? 3,
                 batchId: normalizeTaskBatchId(tmpl.batchId),
+                runWindow: tmpl.runWindow ?? null,
                 maxRetries: tmpl.maxRetries ?? 3,
                 retryBackoffMs: tmpl.retryBackoffMs ?? 30000,
                 timeoutMs: tmpl.timeoutMs,

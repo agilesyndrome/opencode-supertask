@@ -9,7 +9,9 @@ import dashboardServer, {
     isSafeDashboardRestartTarget,
     presentRunLog,
     resolveDashboardConfigState,
+    setDashboardRuntimeConfig,
 } from '../src/web/index';
+import type { GatewayConfig } from '../src/gateway/config';
 import { resolveEditedRunAt } from '../src/web/ui';
 import { TaskService } from '../src/core/services/task.service';
 import { TaskRunService } from '../src/core/services/task-run.service';
@@ -25,6 +27,46 @@ import { clearDashboardGatewayDiagnosticCache } from '../src/web/gateway-diagnos
 describe('Dashboard 安全边界', () => {
     let testDb: ReturnType<typeof setupTestDb>;
     const maintenanceBackups: string[] = [];
+
+    test('任务列表为带窗口任务渲染徽标并支持 off-peak 搜索', async () => {
+        await TaskService.add({ name: '夜间故事', agent: 'build', prompt: 'p', runWindow: 'off-peak' });
+        await TaskService.add({ name: '白天故事', agent: 'build', prompt: 'p' });
+
+        const page = await (await dashboardApp.request('/', { headers: { 'accept-language': 'en' } })).text();
+        const badgeCount = page.match(/>Off-peak</g)?.length ?? 0;
+        expect(badgeCount).toBe(1);
+
+        const gatedRow = /data-search="([^"]*夜间故事[^"]*)"/.exec(page)?.[1] ?? '';
+        expect(gatedRow).toContain('off-peak');
+        const plainRow = /data-search="([^"]*白天故事[^"]*)"/.exec(page)?.[1] ?? '';
+        expect(plainRow).not.toContain('off-peak');
+
+        const zhPage = await (await dashboardApp.request('/', { headers: { cookie: 'supertask_locale=zh-CN' } })).text();
+        expect(zhPage).toContain('闲时');
+    });
+
+
+    /** 反代场景用的最小 GatewayConfig：只关心 dashboard.extraHosts 的中间件行为。 */
+    function gatewayConfigWithExtraHosts(extraHosts: string[]): GatewayConfig {
+        return {
+            configVersion: 2,
+            worker: {
+                maxConcurrency: 1,
+                pollIntervalMs: 1000,
+                heartbeatIntervalMs: 30_000,
+                taskTimeoutMs: 1_800_000,
+                shutdownGracePeriodMs: 30_000,
+            },
+            scheduler: { enabled: false, checkIntervalMs: 1000 },
+            watchdog: {
+                heartbeatTimeoutMs: 600_000,
+                checkIntervalMs: 60_000,
+                cleanupIntervalMs: 86_400_000,
+                retentionDays: 30,
+            },
+            dashboard: { enabled: true, port: 4680, extraHosts },
+        };
+    }
 
     beforeEach(() => {
         testDb = setupTestDb();
@@ -735,6 +777,48 @@ describe('Dashboard 安全边界', () => {
         });
         expect(allowed.status).toBe(200);
         expect(await TaskService.getById(task.id)).toBeNull();
+    });
+
+    test('反代场景：dashboard.extraHosts 中的主机名可访问，其余仍然拒绝', async () => {
+        setDashboardRuntimeConfig(gatewayConfigWithExtraHosts(['supertask.example']));
+        try {
+            const allowed = await dashboardApp.request('http://supertask.example/api/filesystem/directories');
+            expect(allowed.status).toBe(200);
+
+            const stillBlocked = await dashboardApp.request('http://evil.example/api/filesystem/directories');
+            expect(stillBlocked.status).toBe(421);
+
+            const conflictingPort = await dashboardApp.request('http://localhost/health', {
+                headers: { Host: 'supertask.example:99999' },
+            });
+            expect(conflictingPort.status).toBe(421);
+
+            // 反代下浏览器 Origin 是 https，而上游 URL 是 http：同主机名即放行
+            const proxied = await dashboardApp.request('http://supertask.example/api/tasks/99999', {
+                method: 'POST',
+                headers: { Origin: 'https://supertask.example', 'content-type': 'application/json' },
+                body: '{}',
+            });
+            expect(proxied.status).not.toBe(403);
+
+            // 回环主机名之间的跨端口 CSRF 仍按原逻辑拒绝
+            const csrf = await dashboardApp.request('http://localhost:4680/api/tasks/99999', {
+                method: 'POST',
+                headers: { Origin: 'http://localhost:9999', 'content-type': 'application/json' },
+                body: '{}',
+            });
+            expect(csrf.status).toBe(403);
+
+            // 其他站点的 Origin 仍拒绝
+            const evil = await dashboardApp.request('http://supertask.example/api/tasks/99999', {
+                method: 'POST',
+                headers: { Origin: 'https://evil.example', 'content-type': 'application/json' },
+                body: '{}',
+            });
+            expect(evil.status).toBe(403);
+        } finally {
+            setDashboardRuntimeConfig(null);
+        }
     });
 
     test('拒绝非回环 Host 的读取请求', async () => {

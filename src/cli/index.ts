@@ -13,6 +13,7 @@ import {
     withGatewayMaintenance,
 } from '../daemon/pm2';
 import { getConfigPath, loadConfig } from '@gateway/config';
+import { isOffPeakNow, validateRunWindow } from '@core/offpeak';
 import {
     renderDatabaseError,
     renderDatabaseResult,
@@ -104,6 +105,7 @@ program
     .option('--max-retries <number>', t('首次执行之外允许的重试次数', 'retries allowed after the first attempt'), '3')
     .option('--retry-backoff <duration>', t('重试退避基础间隔，如 30s / 5min', 'retry backoff base, e.g. 30s / 5min'), '30s')
     .option('--timeout <duration>', t('任务硬超时，如 30min / 2h', 'hard timeout, e.g. 30min / 2h'))
+    .option('--run-window <window>', t('运行窗口：off-peak 表示只在闲时被领取', 'run window: off-peak only admits the task outside peak hours'))
     .option('-w, --cwd <path>', t('(已废弃) 系统会自动记录提交时的当前目录', '(deprecated) the submission directory is recorded automatically'))
     .action(async (options) => withDb(async () => {
         const submitCwd = process.cwd();
@@ -127,6 +129,7 @@ program
             maxRetries: parseBoundedInteger(options.maxRetries, 'max-retries', 0, 1000),
             retryBackoffMs,
             timeoutMs,
+            runWindow: validateRunWindow(options.runWindow),
         });
         console.log(JSON.stringify({ id: task.id, status: 'created' }, null, 2));
     }));
@@ -199,7 +202,10 @@ program
     .command('next')
     .description(t('获取下一个待执行的任务', 'show the next runnable task'))
     .action(async () => withDb(async () => {
-        const task = await TaskService.next({ cwd: process.cwd() });
+        const task = await TaskService.next({
+            cwd: process.cwd(),
+            offPeakNow: isOffPeakNow(new Date(), loadConfig().scheduler.offPeak),
+        });
         if (task) {
             console.log(JSON.stringify({
                 id: task.id,
@@ -271,6 +277,20 @@ program
             console.log(JSON.stringify({ retried: count, batchId: options.batch }));
         } else {
             console.log(JSON.stringify({ error: 'Please specify --id or --batch' }));
+            process.exit(1);
+        }
+    }));
+
+program
+    .command('run-now')
+    .description(t('清除运行窗口，让被闸住的任务立即可被领取', 'clear the run window so a gated task becomes immediately claimable'))
+    .requiredOption('--id <id>', t('任务 ID', 'task ID'))
+    .action(async (options) => withDb(async () => {
+        const task = await TaskService.clearRunWindow(parsePositiveInteger(options.id, 'id'), { cwd: process.cwd() });
+        if (task) {
+            console.log(JSON.stringify({ id: task.id, status: task.status, runWindow: task.runWindow }));
+        } else {
+            console.log(JSON.stringify({ error: 'Task not found or already finished' }));
             process.exit(1);
         }
     }));
@@ -350,6 +370,7 @@ program
             .option('--max-retries <number>', t('最大重试次数', 'maximum retries'), '3')
             .option('--retry-backoff <duration>', t('退避基础间隔，如 30s / 5min', 'retry backoff base, e.g. 30s / 5min'), '30s')
             .option('--timeout <duration>', t('每次任务硬超时，如 30min / 2h', 'hard timeout per task, e.g. 30min / 2h'))
+            .option('--run-window <window>', t('运行窗口：off-peak 表示模板生成的任务只在闲时被领取', 'run window: off-peak only admits generated tasks outside peak hours'))
             .action(async (options) => withDb(async () => {
                 let intervalMs: number | null = null;
                 let runAt: number | null = null;
@@ -395,6 +416,7 @@ program
                     maxRetries: parseBoundedInteger(options.maxRetries, 'max-retries', 0, 1000),
                     retryBackoffMs,
                     timeoutMs,
+                    runWindow: validateRunWindow(options.runWindow),
                 });
                 console.log(JSON.stringify({ id: tmpl.id, status: 'created', nextRunAt: tmpl.nextRunAt }, null, 2));
             })),

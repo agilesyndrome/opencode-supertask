@@ -54,7 +54,8 @@ const TASK_STATUSES = new Set<TaskStatus>([
     'pending', 'running', 'done', 'failed', 'dead_letter', 'cancelled',
 ]);
 const SESSION_ID_PATTERN = /^ses_[A-Za-z0-9_]+$/;
-const LOOPBACK_HOST_PATTERN = /^(?:localhost|127\.0\.0\.1|\[::1\])(?::([1-9]\d{0,4}))?$/i;
+const LOOPBACK_HOSTS = ['localhost', '127.0.0.1', '[::1]'];
+const HOST_WITH_PORT_PATTERN = /^(?:\[([^\]]+)\]|([A-Za-z0-9._-]+))(?::([1-9]\d{0,4}))?$/;
 let runtimeConfig: GatewayConfig | null = null;
 let restartScheduled = false;
 
@@ -310,12 +311,21 @@ function resolveLocale(c: Context): Locale {
 app.use('*', async (c, next) => {
     const requestHostname = new URL(c.req.url).hostname;
     const hostHeader = c.req.header('Host');
-    const loopbackHosts = ['localhost', '127.0.0.1', '[::1]'];
-    const hostMatch = hostHeader?.match(LOOPBACK_HOST_PATTERN) ?? null;
-    const hostPort = hostMatch?.[1] === undefined ? null : Number(hostMatch[1]);
-    if (!loopbackHosts.includes(requestHostname)
+    const extraHosts = runtimeConfig?.dashboard.extraHosts ?? [];
+    const allowedHost = (hostname: string): boolean =>
+        LOOPBACK_HOSTS.includes(hostname) || extraHosts.includes(hostname.toLowerCase());
+    const hostMatch = hostHeader?.match(HOST_WITH_PORT_PATTERN) ?? null;
+    // IPv6 保留方括号以与 URL hostname 对齐。
+    const headerHostname = hostMatch === null ? null
+        : hostMatch[1] !== undefined ? `[${hostMatch[1]}]`
+        : hostMatch[2].toLowerCase();
+    const hostPort = hostMatch?.[3] === undefined ? null : Number(hostMatch[3]);
+    if (!allowedHost(requestHostname)
         || (hostHeader !== undefined
-            && (!hostMatch || (hostPort !== null && hostPort > 65_535)))) {
+            && (headerHostname === null
+                || !allowedHost(headerHostname)
+                || headerHostname !== requestHostname.toLowerCase()
+                || (hostPort !== null && hostPort > 65_535)))) {
         return c.json({ error: 'invalid dashboard host' }, 421);
     }
     await next();
@@ -338,8 +348,16 @@ app.use('/api/*', async (c, next) => {
         try {
             const originUrl = new URL(origin);
             const requestUrl = new URL(c.req.url);
-            const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(originUrl.hostname);
-            if (!loopback || originUrl.origin !== requestUrl.origin) {
+            const extraHosts = runtimeConfig?.dashboard.extraHosts ?? [];
+            const originAllowed = LOOPBACK_HOSTS.includes(originUrl.hostname)
+                || extraHosts.includes(originUrl.hostname.toLowerCase());
+            const requestAllowed = LOOPBACK_HOSTS.includes(requestUrl.hostname)
+                || extraHosts.includes(requestUrl.hostname.toLowerCase());
+            const sameOrigin = originUrl.origin === requestUrl.origin;
+            // 反代场景下浏览器 Origin 是 https 而上游 URL 是 http，故额外主机名按主机名（而非完整 origin）比对。
+            const extraSameHost = extraHosts.includes(originUrl.hostname.toLowerCase())
+                && originUrl.hostname.toLowerCase() === requestUrl.hostname.toLowerCase();
+            if (!originAllowed || !requestAllowed || !(sameOrigin || extraSameHost)) {
                 return c.json({ error: 'cross-site request rejected' }, 403);
             }
         } catch {
@@ -708,11 +726,11 @@ app.get('/', async (c) => {
         const latestRun = latestRuns.get(task.id);
         const executionActive = latestRun?.status === 'running';
         const batchId = task.batchId?.trim() || null;
-        const searchable = esc(`${task.name} ${task.agent} ${task.model ?? ''} ${task.variant ?? ''} ${task.prompt} ${task.cwd ?? ''} ${task.batchId ?? ''} ${task.category ?? ''}`);
+        const searchable = esc(`${task.name} ${task.agent} ${task.model ?? ''} ${task.variant ?? ''} ${task.prompt} ${task.cwd ?? ''} ${task.batchId ?? ''} ${task.category ?? ''} ${task.runWindow ?? ''}`);
         return `<tr data-task-row data-search="${searchable}">
           <td class="faint" data-label="${t(locale, 'table.id')}">#${task.id}</td>
           <td data-primary data-label="${t(locale, 'table.task')}"><div class="task-name">${esc(task.name)}</div><div class="task-prompt" title="${esc(task.prompt)}">${esc(task.prompt.substring(0, 160))}</div>
-            <div class="actions task-context"><span class="tag" title="${esc(task.cwd ?? '')}">${esc(task.cwd ? (basename(task.cwd) || task.cwd) : t(locale, 'projects.legacy'))}</span>${batchId ? `<span class="tag" title="${esc(t(locale, 'template.batchId'))}">${esc(batchId)}</span>` : ''}</div></td>
+            <div class="actions task-context"><span class="tag" title="${esc(task.cwd ?? '')}">${esc(task.cwd ? (basename(task.cwd) || task.cwd) : t(locale, 'projects.legacy'))}</span>${batchId ? `<span class="tag" title="${esc(t(locale, 'template.batchId'))}">${esc(batchId)}</span>` : ''}${task.runWindow ? `<span class="tag" title="${esc(t(locale, 'task.runWindowHint'))}">${esc(t(locale, 'task.runWindow'))}</span>` : ''}</div></td>
           <td data-label="${t(locale, 'table.agent')}"><span class="tag">${esc(task.agent)}</span></td>
           <td data-label="${t(locale, 'table.status')}"><span class="badge b-${status}" ${status === 'dead_letter' ? `title="${esc(t(locale, 'status.deadLetterHint'))}"` : ''}>${statusText(locale, status)}</span>${status === 'dead_letter' ? `<div class="muted small" style="margin-top:5px">${t(locale, 'status.deadLetterAction')}</div>` : ''}${executionActive && status !== 'running' ? `<div class="muted small" style="margin-top:5px">${t(locale, 'status.executionStillActive')}</div>` : ''}</td>
           <td data-label="${t(locale, 'table.duration')}" class="small ${executionActive || task.status === 'running' ? '' : 'muted'}">${formatDuration(task.startedAt, task.finishedAt)}</td>

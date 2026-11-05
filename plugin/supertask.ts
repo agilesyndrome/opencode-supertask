@@ -9,6 +9,8 @@
 import { type Plugin, type ToolContext, tool } from "@opencode-ai/plugin";
 import { TaskService } from "@core/services/task.service";
 import { TaskTemplateService } from "@core/services/task-template.service";
+import { isOffPeakNow } from "@core/offpeak";
+import { loadConfig } from "@gateway/config";
 import { getDb, sqlite } from "@core/db";
 import { parseDuration } from "@core/duration";
 import { compareSemanticVersions } from "@core/semver";
@@ -177,6 +179,7 @@ const TOOLS = {
             urgency: tool.schema.number().int().min(1).max(5).optional().describe("紧急程度 1-5（5 最紧急）"),
             batchId: tool.schema.string().trim().min(1).optional().describe("全局串行批次 ID：即使属于不同项目，所有相同非空 batchId 的任务也不会同时执行；独立任务请省略，不要传空字符串或复用同一值"),
             dependsOn: tool.schema.number().int().positive().optional().describe("依赖的任务 ID；需要严格先后顺序时设置，前置任务完成后才会执行"),
+            run_window: tool.schema.enum(["off-peak"]).optional().describe("运行窗口：'off-peak' 表示任务只在闲时窗口内被领取（峰值时段排队等待）；省略则不限窗口"),
             max_retries: tool.schema.number().int().min(0).max(1000).optional().describe("首次执行之外允许的重试次数，默认 3"),
             retry_backoff_ms: tool.schema.number().int().min(0).max(86_400_000).optional().describe("重试退避基础间隔 ms，默认 30000"),
             timeout_ms: tool.schema.number().int().min(1000).max(604_800_000).optional().describe("任务硬超时 ms；未传则使用 Gateway 默认值"),
@@ -201,12 +204,13 @@ const TOOLS = {
                     urgency: args.urgency ?? 3,
                     batchId: args.batchId,
                     dependsOn: args.dependsOn,
+                    runWindow: args.run_window ?? null,
                     cwd: context.directory,
                     maxRetries: args.max_retries,
                     retryBackoffMs: args.retry_backoff_ms,
                     timeoutMs: args.timeout_ms,
                 });
-                return JSON.stringify({ id: task.id, status: "created" });
+                return JSON.stringify({ id: task.id, status: "created", runWindow: task.runWindow ?? null });
             } catch (error) {
                 return JSON.stringify({
                     error: error instanceof Error ? error.message : String(error),
@@ -227,7 +231,10 @@ const TOOLS = {
         },
         async execute(args, context) {
             try {
-                const task = await TaskService.next({ cwd: context.directory });
+                const task = await TaskService.next({
+                    cwd: context.directory,
+                    offPeakNow: isOffPeakNow(new Date(), loadConfig().scheduler.offPeak),
+                });
                 if (task) {
                     return JSON.stringify({
                         id: task.id,
@@ -416,6 +423,7 @@ const TOOLS = {
                     interval: tool.schema.string().optional().describe("循环间隔（recurring 类型必填），友好格式如 '1h' '30min' '5s'，也支持 ISO 8601 duration 如 'PT1H'"),
                 })
                 .describe("调度配置"),
+            run_window: tool.schema.enum(["off-peak"]).optional().describe("运行窗口：模板生成的任务只在闲时窗口内被领取；省略则不限窗口"),
             max_instances: tool.schema.number().int().min(1).max(1000).optional().describe("自动调度的活跃实例上限，默认 1；活跃实例包含排队、运行中和等待重试，手动立即运行不受此限制"),
             max_retries: tool.schema.number().int().min(0).max(1000).optional().describe("克隆给 task 的最大重试次数，默认 3"),
             retry_backoff_ms: tool.schema.number().int().min(0).max(86_400_000).optional().describe("克隆给 task 的退避基础间隔 ms，默认 30000"),
@@ -467,6 +475,7 @@ const TOOLS = {
                     maxRetries: args.max_retries,
                     retryBackoffMs: args.retry_backoff_ms,
                     timeoutMs: args.timeout_ms,
+                    runWindow: args.run_window ?? null,
                 });
                 return JSON.stringify({
                     id: tmpl.id,
