@@ -191,10 +191,11 @@ supertask retry --id 42   # 仅 failed/dead_letter；依赖仍有效时清零重
 
 若任务的 `dependsOn` 已丢失、跨 `cwd` 或进入不可恢复终态，单个和批量重试都会跳过该任务，避免生成永远无法执行的 `pending`。
 
+已完成的任务和已停止（`dead_letter`）的任务可以在详情弹窗中“复刻为新任务”（Fork）：它打开同一个新建任务表单，并预填父任务的名称模板（`Fork of #N`）、项目目录、Agent、模型、variant、提示词、重试预算和超时（会话 ID 不会携带）。表单中的“依赖任务（可选）”允许为复刻任务指定同目录依赖；创建接口（`POST /api/tasks`）接受该字段并沿用同一依赖校验（同 `cwd`、存在且可恢复），与 CLI/插件一致。
+
 `cwd` 同时是项目分组、查询隔离键和 OpenCode 子进程工作目录。插件、CLI、Dashboard 和定时任务模板在入库前都会拒绝空字符串、相对路径、不存在路径和文件路径；旧数据库中遗留的非法 `cwd` 若被 Worker 取到，会直接记录一次失败并进入 `dead_letter`，不会启动 OpenCode 或反复刷错。Dashboard 的任务首页按 `cwd` 汇总运行、排队和异常数量；新建普通任务时选择同一路径即可先看到该项目当前是否有任务执行。`batchId` 是独立于项目分组的全局串行键：所有相同非空值的任务不会同时执行，空白值统一保存为无批次；需要确定完成顺序时使用 `dependsOn`。
 
 `pending`、等待自动重试的 `failed` 和 `dead_letter` 任务可以在 Dashboard 编辑名称、Agent、模型、variant、提示词、分类、优先级、批次、重试与超时；项目目录和依赖关系保持不变。CLI 使用同一 Service：
-
 ```bash
 supertask edit --id 42 --model openai/gpt-5.6-sol --variant xhigh --importance 5 --prompt "更新后的要求"
 supertask edit --id 42 --clear-variant
