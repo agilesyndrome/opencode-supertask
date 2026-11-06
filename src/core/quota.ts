@@ -8,6 +8,8 @@
  */
 
 const QUOTA_ERROR_RE = /provider\.quota:\s*Usage limit reached/i;
+/** 结果日志中的稳定标记：用于 SQL LIKE 识别配额暂停的任务（横幅/统计）。 */
+export const QUOTA_LOG_MARKER = 'provider.quota';
 const WINDOW_RE = /Usage limit reached for (\d+)\s*(minute|hour|day)/i;
 const RESET_AT_RE = /will reset at (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})/;
 

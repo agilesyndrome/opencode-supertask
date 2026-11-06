@@ -25,8 +25,10 @@ import { TaskRunService } from '@core/services/task-run.service';
 import {
     TaskDeletionConflictError,
     TaskService,
+    MANUAL_PAUSE_MARKER,
     type EditableTaskUpdate,
 } from '@core/services/task.service';
+import { QUOTA_LOG_MARKER } from '@core/quota';
 import {
     TaskTemplateService,
     type TaskTemplateUpdate,
@@ -645,6 +647,33 @@ function pagination(locale: Locale, basePath: string, page: number, pages: numbe
     return `<div class="pagination">${previous}<span class="summary">${t(locale, 'pagination.summary', { page, pages, total })}</span>${next}</div>`;
 }
 
+    function renderPauseBanner(
+        locale: Locale,
+        pausedTasks: Awaited<ReturnType<typeof TaskService.listPaused>>,
+        runningTasks: Awaited<ReturnType<typeof TaskService.list>>,
+    ): string {
+        if (pausedTasks.length === 0 && runningTasks.length === 0) return '';
+        const pausedItems = pausedTasks.map((task) => {
+            const quota = (task.resultLog ?? '').includes(QUOTA_LOG_MARKER);
+            const detail = quota
+                ? t(locale, 'banner.until', { time: formatDateTime(task.retryAfter, locale) })
+                : t(locale, 'banner.pausedManual');
+            return `<div class="banner-item">
+                <span class="banner-icon" aria-hidden="true">⏸</span>
+                <span><strong>${esc(task.name)}</strong><span class="muted small"> · ${esc(detail)}</span></span>
+                <button type="button" class="btn btn-primary" onclick="retryTask(${task.id})">▶ ${t(locale, 'action.resume')}</button>
+            </div>`;
+        }).join('');
+        const runningItems = runningTasks.map((task) => `<div class="banner-item">
+            <span class="banner-icon" aria-hidden="true">▶</span>
+            <span><strong>${esc(task.name)}</strong><span class="muted small"> · ${t(locale, 'banner.running')}</span></span>
+            <button type="button" class="btn btn-warning" onclick="pauseTask(${task.id})">⏸ ${t(locale, 'action.pause')}</button>
+        </div>`).join('');
+        return `<section class="queue-banner reveal" aria-label="${t(locale, 'banner.title')}">
+            ${pausedItems}${runningItems}
+        </section>`;
+    }
+
 app.get('/', async (c) => {
     const locale = resolveLocale(c);
     const page = parsePositiveInteger(c.req.query('page') || '1');
@@ -659,7 +688,7 @@ app.get('/', async (c) => {
     const limit = 50;
     const offset = (page - 1) * limit;
 
-    const [tasks, statsData, globalStats, projects, globalRunning, legacyStats, legacyRunning] = await Promise.all([
+    const [tasks, statsData, globalStats, projects, globalRunning, legacyStats, legacyRunning, pausedTasks, runningTasks] = await Promise.all([
         TaskService.list({
             limit,
             offset,
@@ -674,6 +703,8 @@ app.get('/', async (c) => {
         TaskService.countRunning(),
         TaskService.stats({ legacyCwd: true }),
         TaskService.countRunning({ legacyCwd: true }),
+        TaskService.listPaused(),
+        TaskService.list({ status: 'running', limit: 10 }),
     ]);
     const latestRuns = await TaskRunService.getLatestByTaskIds(tasks.map((task) => task.id));
     const selectedRunning = legacyProjectFilter
@@ -787,7 +818,9 @@ app.get('/', async (c) => {
         running: project.running,
         failed: project.failed,
     }]))).replace(/</g, '\\u003c');
+    const pauseBanner = renderPauseBanner(locale, pausedTasks, runningTasks);
     const body = `
+      ${pauseBanner}
       <div class="stats-grid">
         ${statCard(counts.pending, t(locale, 'stats.pending'), 'tone-neutral', icon('clock'))}
         ${statCard(counts.running, t(locale, 'stats.running'), 'tone-blue', icon('activity'), 'reveal-delay-1')}
@@ -1207,6 +1240,16 @@ app.post('/api/tasks/:id/run-now', async (c) => {
     if (task) return c.json({ success: true, runWindow: task.runWindow ?? null });
     return await TaskService.getById(id)
         ? c.json({ error: 'task status does not allow run-now' }, 409)
+        : c.json({ error: 'not found' }, 404);
+});
+
+app.post('/api/tasks/:id/pause', async (c) => {
+    const id = parsePositiveInteger(c.req.param('id'));
+    if (id === null) return c.json({ error: 'invalid id' }, 400);
+    const task = await TaskService.pauseRun(id, `${MANUAL_PAUSE_MARKER}（用户请求，Resume 恢复）`);
+    if (task) return c.json({ success: true });
+    return await TaskService.getById(id)
+        ? c.json({ error: 'task status does not allow pause' }, 409)
         : c.json({ error: 'not found' }, 404);
 });
 
