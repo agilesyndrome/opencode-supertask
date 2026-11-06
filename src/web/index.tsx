@@ -951,6 +951,57 @@ app.get('/', async (c) => {
     }));
 });
 
+// 看板实时更新：轻量指纹轮询（任务总数/最大 ID/各状态计数/最大重试时刻），变化才推送 change 事件；比在 Service 内埋通知点更少侵入。
+app.get('/api/events', (c) => {
+    const encoder = new TextEncoder();
+    let timer: ReturnType<typeof setInterval> | undefined;
+    let lastFingerprint: string | null = null;
+    const stream = new ReadableStream({
+        start(controller) {
+            const send = (payload: string): void => {
+                try {
+                    controller.enqueue(encoder.encode(payload));
+                } catch {
+                    // 流已被取消。
+                }
+            };
+            const push = async (): Promise<void> => {
+                try {
+                    const [row] = await db
+                        .select({
+                            total: sql<number>`count(*)`,
+                            maxId: sql<number>`coalesce(max(id),0)`,
+                            pending: sql<number>`count(*) filter (where status = 'pending')`,
+                            running: sql<number>`count(*) filter (where status = 'running')`,
+                            failed: sql<number>`count(*) filter (where status = 'failed')`,
+                            dead: sql<number>`count(*) filter (where status = 'dead_letter')`,
+                            maxRetryAfter: sql<number>`coalesce(max(case when status = 'failed' then retry_after end),0)`,
+                        })
+                        .from(schema.tasks);
+                    const fingerprint = [row?.total, row?.maxId, row?.pending, row?.running, row?.failed, row?.dead, row?.maxRetryAfter].join(':');
+                    if (lastFingerprint !== null && fingerprint !== lastFingerprint) {
+                        send(`event: change\ndata: ${fingerprint}\n\n`);
+                    }
+                    lastFingerprint = fingerprint;
+                } catch {
+                    // 查询失败保持静默，下个周期重试。
+                }
+            };
+            timer = setInterval(() => {
+                void push();
+                send(': ping\n\n');
+            }, 2000);
+            void push();
+        },
+        cancel() {
+            if (timer) clearInterval(timer);
+        },
+    });
+    return new Response(stream, {
+        headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' },
+    });
+});
+
 // 看板：泳道=批次（cwd+batchId），无批次的任务沿 dependsOn 并入链头，否则单卡；列复用展示层状态词汇。
 app.get('/board', async (c) => {
     const locale = resolveLocale(c);
@@ -977,7 +1028,7 @@ app.get('/board', async (c) => {
         const disp = resolveDisplayStatus(locale, task, now, { blockerDead: cascadeBlockerStillDead(task, tasksById) });
         const batchId = task.batchId?.trim() || '';
         const stuckClass = disp.kind === 'blocked' ? ' card-stuck-pulse' : disp.kind === 'stopped' ? ' card-stuck' : '';
-        return `<article class="board-card${stuckClass}">
+        return `<article class="board-card${stuckClass}" data-task-id="${task.id}">
           <div class="board-card-title">#${task.id} ${esc(task.name)}</div>
           <div class="board-card-status"><span class="badge ${disp.badgeClass}">${esc(disp.label)}</span>${disp.subtitle ? `<div class="muted small">${esc(disp.subtitle)}</div>` : ''}</div>
           <div class="actions task-context"><span class="tag">${esc(task.agent)}</span>${batchId ? `<span class="tag" title="${esc(t(locale, 'template.batchId'))}">${esc(batchId)}</span>` : ''}</div>
