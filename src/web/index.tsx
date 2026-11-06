@@ -1326,7 +1326,7 @@ app.get('/system', async (c) => {
             <div class="field"><label for="rd">${t(locale, 'system.retentionDays')}</label>${unitInput('rd', config.watchdog.retentionDays, CONFIG_BOUNDS.retentionDays, 1, t(locale, 'system.days'))}</div>
           </section>
           <section class="card settings-card reveal-delay-2"><h2 class="settings-title"><span>${icon('tasks')}${t(locale, 'system.modelLadder')}</span></h2>
-            <datalist id="ladder-providers">${ladderProviders.map((provider) => `<option value="${esc(provider)}">${(ladderRemainders.get(provider) ?? []).length} models</option>`).join('')}</datalist>
+            <datalist id="ladder-providers">${ladderProviders.map((provider) => `<option value="${esc(provider)}"></option>`).join('')}</datalist>
             ${ladderProviders.map((provider) => `<datalist id="dl-${esc(provider)}">${(ladderRemainders.get(provider) ?? []).map((rest) => `<option value="${esc(rest)}"></option>`).join('')}</datalist>`).join('')}
             <div class="field"><label>${t(locale, 'system.ladderPeak')}</label></div>
             <div class="ladder" id="lp">${config.modelLadder.peak.map(ladderRungHtml).join('')}</div>
