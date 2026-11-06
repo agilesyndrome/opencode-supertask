@@ -862,7 +862,55 @@ export function buildBoardLanes(tasks: Task[], nowMs: number = Date.now()): Boar
             result.title = { type: 'chain', id: result.title.id };
         }
     }
-    return [...lanes.values()];
+    return sortBoardLanes([...lanes.values()], byId);
+}
+
+/** 泳道内“下一个要跑的在最上面”：先按依赖深度（链头先跑），再用调度器的领取顺序（urgency→importance→createdAt→id）；泳道按各自的领先卡排序。 */
+function boardDepth(task: Task, byId: Map<number, Task>): number {
+    let depth = 0;
+    let current = task;
+    const visited = new Set<number>([task.id]);
+    while (current.dependsOn !== null) {
+        const parent = byId.get(current.dependsOn);
+        if (!parent || visited.has(parent.id)) break;
+        visited.add(parent.id);
+        current = parent;
+        depth += 1;
+    }
+    return depth;
+}
+
+function boardPickKey(task: Task): readonly [number, number, number, number] {
+    const created = task.createdAt instanceof Date ? task.createdAt.getTime() : Date.parse(String(task.createdAt ?? '')) || 0;
+    return [-(task.urgency ?? 3), -(task.importance ?? 3), created, task.id];
+}
+
+function sortBoardLanes(lanes: BoardLane[], byId: Map<number, Task>): BoardLane[] {
+    const byRunOrder = (a: Task, b: Task): number =>
+        (boardDepth(a, byId) - boardDepth(b, byId)) || compareKeys(boardPickKey(a), boardPickKey(b));
+    for (const lane of lanes) {
+        for (const column of ['queued', 'blocked', 'running', 'paused', 'stopped'] as const) {
+            lane[column].sort(byRunOrder);
+        }
+    }
+    const lead = (lane: BoardLane): Task | undefined =>
+        lane.running[0] ?? lane.queued[0] ?? lane.blocked[0] ?? lane.paused[0] ?? lane.stopped[0];
+    return lanes.sort((a, b) => {
+        const leadA = lead(a);
+        const leadB = lead(b);
+        if (!leadA || !leadB) return leadA ? -1 : leadB ? 1 : 0;
+        return compareKeys(boardPickKey(leadA), boardPickKey(leadB));
+    });
+}
+
+function compareKeys(
+    a: readonly [number, number, number, number],
+    b: readonly [number, number, number, number],
+): number {
+    for (let i = 0; i < a.length; i += 1) {
+        if (a[i] !== b[i]) return a[i] - b[i];
+    }
+    return 0;
 }
 
 export function statusText(locale: Locale, status: string): string {
@@ -1079,6 +1127,9 @@ const STYLES = `
   .board-col-empty { padding:4px 0 2px; }
   .board-card { border:1px solid var(--border); border-radius:8px; background:var(--surface); padding:8px 10px; margin-top:8px; }
   .board-card-title { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .card-stuck { border-color:var(--red); box-shadow:0 0 0 1px var(--red); }
+  .card-stuck-pulse { border-color:var(--red); box-shadow:0 0 0 1.5px var(--red); animation:stuck-pulse 2s ease-in-out infinite; }
+  @keyframes stuck-pulse { 0%,100% { box-shadow:0 0 0 1.5px var(--red); } 50% { box-shadow:0 0 0 3px var(--red); } }
   .board-card-status { margin-top:4px; }
   .board-card-actions { margin-top:8px; }
   .board-card-actions .btn { padding:3px 10px; font-size:.85em; }

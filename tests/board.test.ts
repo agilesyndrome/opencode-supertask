@@ -19,13 +19,15 @@ describe('buildBoardLanes 泳道分组', () => {
         const running = await TaskService.add({ ...base, batchId: 'b-1' });
         await TaskService.start(running.id);
         await TaskService.add({ ...base, name: '排队', batchId: 'b-1' });
+        await TaskService.add({ ...base, name: '低优', batchId: 'b-1', urgency: 1 });
         await TaskService.add({ ...base, name: '已完成', status: 'done', batchId: 'b-1', resultLog: 'ok' });
 
         const lanes = buildBoardLanes(await TaskService.list({}));
         expect(lanes).toHaveLength(1);
         expect(lanes[0].title).toEqual({ type: 'batch', id: 'b-1' });
         expect(lanes[0].running).toHaveLength(1);
-        expect(lanes[0].queued).toHaveLength(1);
+        // 列内顺序 = 执行顺序：高优在前，低优垫底。
+        expect(lanes[0].queued.map((task) => task.name)).toEqual(['排队', '低优']);
         expect(lanes[0].done).toHaveLength(1);
         expect(lanes[0].done[0].name).toBe('已完成');
     });

@@ -946,7 +946,8 @@ app.get('/board', async (c) => {
     const renderCard = (task: Task) => {
         const disp = resolveDisplayStatus(locale, task, now, { blockerDead: cascadeBlockerStillDead(task, tasksById) });
         const batchId = task.batchId?.trim() || '';
-        return `<article class="board-card">
+        const stuckClass = disp.kind === 'blocked' ? ' card-stuck-pulse' : disp.kind === 'stopped' ? ' card-stuck' : '';
+        return `<article class="board-card${stuckClass}">
           <div class="board-card-title">#${task.id} ${esc(task.name)}</div>
           <div class="board-card-status"><span class="badge ${disp.badgeClass}">${esc(disp.label)}</span>${disp.subtitle ? `<div class="muted small">${esc(disp.subtitle)}</div>` : ''}</div>
           <div class="actions task-context"><span class="tag">${esc(task.agent)}</span>${batchId ? `<span class="tag" title="${esc(t(locale, 'template.batchId'))}">${esc(batchId)}</span>` : ''}</div>
