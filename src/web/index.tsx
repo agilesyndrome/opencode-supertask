@@ -1234,10 +1234,24 @@ app.get('/runs', async (c) => {
 app.get('/system', async (c) => {
     const locale = resolveLocale(c);
     const config = loadConfig();
-    // 模型阶梯编辑器：provider/model 下拉数据来自 OpenCode 目录（不可用时仍可手输）。
-    let ladderCatalogModels: string[] = [];
+    // 模型阶梯编辑器：provider/model 下拉数据 = 各任务项目目录的 OpenCode 目录并集
+    // （目录按项目惰性加载：免费/订阅模型只在其实际可用的项目里出现；不可用时仍可手输）。
+    const ladderCatalogModels: string[] = [];
     try {
-        ladderCatalogModels = (await loadOpenCodeCatalog(process.cwd(), { timeoutMs: 8000 })).models;
+        const projects = await TaskService.projectSummaries(1000);
+        const seen = new Set<string>();
+        for (const project of projects.map((item) => item.cwd).filter(Boolean).slice(0, 12)) {
+            try {
+                for (const model of (await loadOpenCodeCatalog(project, { timeoutMs: 8000 })).models) {
+                    if (!seen.has(model)) {
+                        seen.add(model);
+                        ladderCatalogModels.push(model);
+                    }
+                }
+            } catch {
+                // 单个项目目录失败不影响其余。
+            }
+        }
     } catch {
         // 目录不可用：无 datalist 建议，不阻塞系统页。
     }
@@ -1245,9 +1259,16 @@ app.get('/system', async (c) => {
         const separator = value.indexOf('/');
         return separator === -1 ? { provider: '', model: value } : { provider: value.slice(0, separator), model: value.slice(separator + 1) };
     };
-    const ladderProviders = [...new Set(ladderCatalogModels
-        .map((model) => ladderSplit(model).provider)
-        .filter(Boolean))];
+    const ladderRemainders = new Map<string, string[]>();
+    for (const model of ladderCatalogModels) {
+        const { provider, model: rest } = ladderSplit(model);
+        if (!provider) continue;
+        const list = ladderRemainders.get(provider) ?? [];
+        if (!list.includes(rest)) list.push(rest);
+        ladderRemainders.set(provider, list);
+    }
+    for (const list of ladderRemainders.values()) list.sort((left, right) => left.localeCompare(right));
+    const ladderProviders = [...ladderRemainders.keys()].sort((left, right) => left.localeCompare(right));
     const ladderRungHtml = (value: string): string => {
         const { provider, model } = ladderSplit(value);
         const listAttr = provider && ladderProviders.includes(provider) ? ` list="dl-${esc(provider)}"` : '';
@@ -1305,8 +1326,8 @@ app.get('/system', async (c) => {
             <div class="field"><label for="rd">${t(locale, 'system.retentionDays')}</label>${unitInput('rd', config.watchdog.retentionDays, CONFIG_BOUNDS.retentionDays, 1, t(locale, 'system.days'))}</div>
           </section>
           <section class="card settings-card reveal-delay-2"><h2 class="settings-title"><span>${icon('tasks')}${t(locale, 'system.modelLadder')}</span></h2>
-            <datalist id="ladder-providers">${ladderProviders.map((provider) => `<option value="${esc(provider)}"></option>`).join('')}</datalist>
-            ${ladderProviders.map((provider) => `<datalist id="dl-${esc(provider)}">${ladderCatalogModels.filter((model) => model.startsWith(`${provider}/`)).map((model) => `<option value="${esc(ladderSplit(model).model)}"></option>`).join('')}</datalist>`).join('')}
+            <datalist id="ladder-providers">${ladderProviders.map((provider) => `<option value="${esc(provider)}">${(ladderRemainders.get(provider) ?? []).length} models</option>`).join('')}</datalist>
+            ${ladderProviders.map((provider) => `<datalist id="dl-${esc(provider)}">${(ladderRemainders.get(provider) ?? []).map((rest) => `<option value="${esc(rest)}"></option>`).join('')}</datalist>`).join('')}
             <div class="field"><label>${t(locale, 'system.ladderPeak')}</label></div>
             <div class="ladder" id="lp">${config.modelLadder.peak.map(ladderRungHtml).join('')}</div>
             <div class="actions ladder-add"><button type="button" class="btn" onclick="addLadderRung('lp')" ${config.modelLadder.peak.length >= 8 ? 'disabled' : ''}>${t(locale, 'system.addRung')}</button></div>
