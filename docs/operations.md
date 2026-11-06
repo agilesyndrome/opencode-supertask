@@ -205,6 +205,8 @@ supertask edit --id 42 --clear-variant
 
 Dashboard 的“定时任务”页可以直接创建和编辑 `cron`、固定间隔及一次性任务。表单支持模型、variant、Agent、提示词、项目目录、优先级、批次、自动调度活跃实例上限、重试等待和单次超时。重试、超时与循环间隔先选常用预设，只有选“自定义”时才出现数字和秒/分钟/小时/天单位；一次性任务使用日期时间选择器。CLI 仍支持 `30s`、`5min`、`1h` 或 `2d` 以便脚本调用。编辑只影响以后生成的任务，不会回写已经排队或正在运行的任务。
 
+“看板”页按泳道汇总进行中的工作：泳道首先是 `cwd + batchId`（批次），没有批次的任务沿 `dependsOn` 并入所在依赖链（以链头命名），既无批次也无依赖的任务单独成卡。每个泳道内按展示状态分列——排队中、受阻塞、运行中、已暂停、已停止，列名与队列页一致；批次泳道底部用折叠区统计“已完成”。页首的 WIP 徽章对比当前运行数与 `worker.maxConcurrency`（达到上限时高亮）。看板只是只读视图加既有动作入口（暂停/恢复/重试/立即运行），不发起新查询也不改写状态语义；按 `cwd` 筛选时只显示该项目的泳道。注意：批次与依赖链的并发控制仍由现有调度逻辑保证，看板本身不引入新的并发限制。
+
 新建任务或定时任务时，先用 Dashboard 的文件夹选择器确定项目。Gateway 会在该目录读取本机 OpenCode 能力目录（1.x：`agent list` / `models --verbose`；2.x：`api agent.list` / `api model.list`）：Agent 下拉框只保留 primary/all 模式，避免把仅供委派的 subagent 直接传给 `opencode run`；模型先选 Provider 再选具体值，随后只显示该模型元数据声明的 variants。选“跟随 Agent / OpenCode 默认模型”时 Worker 不传 `-m`；variant 选默认值时不传 variant。OpenCode 2.x 只能以 `-m provider/model#variant` 指定 variant，因此 2.x 下使用 variant 必须同时选择模型，否则 run 直接失败并进入 `dead_letter`。CLI 和插件仍允许 Provider 自定义 variant 字符串，最终由实际执行的 OpenCode 判定。读取失败会在表单中显示原因，不使用伪造的静态列表。
 
 任务页和执行记录页的“继续会话”会从服务端按 run ID 读取已捕获的 Session ID，校验格式后复制 `cd <执行目录> && <该 run 实际使用的 opencode> --session <sessionId>`（旧 run 没有命令元数据时回退到任务 `cwd` 和当前 `SUPERTASK_OPENCODE_BIN`），保证用执行时的 OpenCode 版本在原项目中继续；完整 Session ID 不写入页面 HTML。浏览器拒绝异步写剪贴板时会弹出已选中命令的手动复制框。任务队列页的行内不再提供“继续会话”，该入口在任务详情的动作栏中。

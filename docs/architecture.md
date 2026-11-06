@@ -119,6 +119,7 @@ pending / running / failed ──cancel──> cancelled
 - 超出预算进入 `dead_letter`，不会自动执行；编辑 `failed` 任务并降低预算导致立即停止重试时，会在同一事务递归收敛整条依赖链。手动 retry 仅在依赖仍存在、同 `cwd` 且仍可恢复或已完成时将状态改回 `pending`，并把 `retryCount` 清零。校验与状态更新使用同一写事务，避免和历史清理并发制造悬空依赖。
 - 展示层状态推导（`src/web/ui.ts` 的 `resolveDisplayStatus`）不改写 DB 状态，只把同一 DB 状态按原因细分：`dead_letter` 且结果日志含"依赖任务 #N 已进入不可恢复终态"级联标记显示为"受阻塞（依赖 #N）"且不提供 Retry（依赖已不可恢复，重试必然被拒）；真实死信显示"已停止"并提供 Retry；`failed` 按哨兵 `retryAfter`（手动暂停）、配额标记（配额暂停，含恢复时刻）和退避（"重试等待中"）区分标签，主动按钮统一为每行一个（运行中→Pause、暂停→Resume、退避/死信→Retry）。"继续会话"只在任务详情中提供；行级不输出。行内 Cancel 移除，取消入口集中在任务详情 danger zone。未筛选视图把 `done` 收进底部可折叠的"已完成（N）"区（N 为该项目 done 总数），Done 筛选芯片仍是平铺列表。
 - 单次任务可指定模型 `variant` 并覆盖 `maxRetries`、`retryBackoffMs` 和 `timeoutMs`；模板克隆时会复制这些字段。
+- 看板页（`/board`）是纯 SSR 视图：`src/web/ui.ts` 的 `buildBoardLanes` 把任务按 `cwd + batchId` 分泳道，无批次的任务沿 `dependsOn` 归入链头（祖先带批次时挂靠其批次泳道，孤立的单独成卡）；列只做展示状态（同 `resolveDisplayStatus` 词汇）到"排队/受阻塞/运行中/已暂停/已停止"的映射，done 只作为批次泳道内的折叠统计出现。WIP 徽章读取现有 `stats` 与配置 `worker.maxConcurrency`，不新增查询模型；批次与依赖的串行化仍完全由调度器承担，看板不做并发控制。
 - 删除不是运行态迁移：`running` 任务或仍存在 `running` 执行记录的任务必须先取消并等待 Worker 关闭 run；仍被 `pending/running/failed/dead_letter` 任务依赖的前置任务也拒绝删除。手动删除和 Watchdog 过期清理都遵守依赖保护，避免制造悬空任务。
 
 ## 并发、超时与故障恢复

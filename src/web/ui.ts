@@ -7,7 +7,7 @@ import {
 } from '@core/services/task.service';
 
 export type Locale = 'zh-CN' | 'en';
-export type ActiveTab = 'tasks' | 'templates' | 'runs' | 'system';
+export type ActiveTab = 'tasks' | 'board' | 'templates' | 'runs' | 'system';
 
 const ZH = {
     'app.name': 'SuperTask',
@@ -19,6 +19,9 @@ const ZH = {
     'nav.templates': '定时任务',
     'nav.runs': '执行记录',
     'nav.system': '系统',
+    'nav.board': '看板',
+    'page.board.title': '看板',
+    'page.board.description': '按项目与批次分栏查看进行中的任务，关注 WIP 与受阻塞的链路。',
     'page.tasks.title': '任务队列',
     'page.tasks.description': '查看优先级、执行状态与重试情况，快速处理需要关注的任务。',
     'page.templates.title': '定时任务',
@@ -27,6 +30,17 @@ const ZH = {
     'page.runs.description': '追踪每次 Agent 执行的状态、耗时、心跳与输出。',
     'page.system.title': '系统设置',
     'page.system.description': '调整 Gateway 运行参数，检查实时任务并管理本地数据。',
+    'board.queued': '排队中',
+    'board.blocked': '受阻塞',
+    'board.running': '运行中',
+    'board.paused': '已暂停',
+    'board.stopped': '已停止',
+    'board.completed': '已完成',
+    'board.wip': 'WIP {running}/{max}',
+    'board.wipLimit': '上限 {max}',
+    'board.batchLane': '批次 {id}',
+    'board.chainLane': '#{id} 起的依赖链',
+    'board.empty': '没有待处理的任务。',
     'action.refresh': '刷新',
     'action.details': '详情',
     'action.retry': '重试',
@@ -353,6 +367,9 @@ const EN: Record<MessageKey, string> = {
     'nav.templates': 'Scheduled tasks',
     'nav.runs': 'Runs',
     'nav.system': 'System',
+    'nav.board': 'Board',
+    'page.board.title': 'Board',
+    'page.board.description': 'Active work grouped by project and batch, with WIP and blocked chains at a glance.',
     'page.tasks.title': 'Task queue',
     'page.tasks.description': 'Track priority, execution state, and retries, then act on tasks that need attention.',
     'page.templates.title': 'Scheduled tasks',
@@ -361,6 +378,17 @@ const EN: Record<MessageKey, string> = {
     'page.runs.description': 'Inspect the status, duration, heartbeat, and output of every agent run.',
     'page.system.title': 'System settings',
     'page.system.description': 'Tune Gateway behavior, inspect active work, and manage local data.',
+    'board.queued': 'Queued',
+    'board.blocked': 'Blocked',
+    'board.running': 'Running',
+    'board.paused': 'Paused',
+    'board.stopped': 'Stopped',
+    'board.completed': 'Completed',
+    'board.wip': 'WIP {running}/{max}',
+    'board.wipLimit': 'limit {max}',
+    'board.batchLane': 'Batch {id}',
+    'board.chainLane': 'Chain from #{id}',
+    'board.empty': 'No active tasks.',
     'action.refresh': 'Refresh',
     'action.details': 'Details',
     'action.retry': 'Retry',
@@ -740,6 +768,90 @@ export function resolveDisplayStatus(
     return { kind: status, label: statusText(locale, status), subtitle: '', badgeClass: `b-${status}` };
 }
 
+/** 看板泳道：批次（cwd+batchId）为主键，无批次的任务沿 dependsOn 并入链头泳道，否则单独成卡。 */
+export interface BoardLane {
+    key: string;
+    title: { type: 'batch' | 'chain' | 'task'; id: string };
+    queued: Task[];
+    blocked: Task[];
+    running: Task[];
+    paused: Task[];
+    stopped: Task[];
+    done: Task[];
+}
+
+type BoardColumn = 'queued' | 'blocked' | 'running' | 'paused' | 'stopped';
+
+const BOARD_COLUMN_BY_KIND: Record<string, BoardColumn> = {
+    pending: 'queued',
+    retrying: 'queued',
+    blocked: 'blocked',
+    running: 'running',
+    paused: 'paused',
+    stopped: 'stopped',
+    cancelled: 'stopped',
+};
+
+export function buildBoardLanes(tasks: Task[], nowMs: number = Date.now()): BoardLane[] {
+    const byId = new Map(tasks.map((task) => [task.id, task]));
+    const lanes = new Map<string, BoardLane>();
+    const lane = (key: string, title: BoardLane['title']): BoardLane => {
+        const found = lanes.get(key);
+        if (found) return found;
+        const created: BoardLane = { key, title, queued: [], blocked: [], running: [], paused: [], stopped: [], done: [] };
+        lanes.set(key, created);
+        return created;
+    };
+    const batchKeyOf = (task: Task): string => `b\u001f${task.cwd}\u001f${task.batchId}`;
+    const batchTitleOf = (task: Task): BoardLane['title'] => ({ type: 'batch', id: task.batchId ?? '' });
+
+    for (const task of tasks) {
+        if (!task.batchId) continue;
+        const batchLane = lane(batchKeyOf(task), batchTitleOf(task));
+        if (task.status === 'done') {
+            batchLane.done.push(task);
+        } else {
+            const column = BOARD_COLUMN_BY_KIND[resolveDisplayStatus('en', task, nowMs).kind] ?? 'queued';
+            batchLane[column].push(task);
+        }
+    }
+    for (const task of tasks) {
+        if (task.status === 'done' || task.batchId) continue;
+        let laneKey: string;
+        if (task.dependsOn) {
+            // 沿依赖向上走到链头；途中遇到带批次的祖先则直接挂靠其批次泳道。
+            const visited = new Set<number>([task.id]);
+            let head = task;
+            let parentBatchKey: string | null = null;
+            while (head.dependsOn !== null) {
+                const parent = byId.get(head.dependsOn);
+                if (!parent || visited.has(parent.id)) break;
+                visited.add(parent.id);
+                if (parent.batchId) {
+                    parentBatchKey = batchKeyOf(parent);
+                    break;
+                }
+                head = parent;
+            }
+            laneKey = parentBatchKey ?? `c\u001f${head.cwd}\u001f${head.id}`;
+            if (!parentBatchKey && !lanes.has(laneKey)) {
+                lane(laneKey, { type: 'chain', id: String(head.id) });
+            }
+        } else {
+            laneKey = `c\u001f${task.cwd}\u001f${task.id}`;
+        }
+        const target = lanes.get(laneKey) ?? lane(laneKey, task.dependsOn ? { type: 'chain', id: String(task.id) } : { type: 'task', id: String(task.id) });
+        const column = BOARD_COLUMN_BY_KIND[resolveDisplayStatus('en', task, nowMs).kind] ?? 'queued';
+        target[column].push(task);
+    }
+    for (const result of lanes.values()) {
+        if (result.title.type === 'task' && result.queued.length + result.blocked.length + result.running.length + result.paused.length + result.stopped.length > 1) {
+            result.title = { type: 'chain', id: result.title.id };
+        }
+    }
+    return [...lanes.values()];
+}
+
 export function statusText(locale: Locale, status: string): string {
     const key = `status.${status}` as MessageKey;
     return key in ZH ? t(locale, key) : t(locale, 'status.unknown');
@@ -788,7 +900,7 @@ export function formatDateTime(value: Date | number | null, locale: Locale): str
     }).format(date);
 }
 
-type IconName = 'brand' | 'tasks' | 'templates' | 'runs' | 'system' | 'refresh'
+type IconName = 'brand' | 'tasks' | 'board' | 'templates' | 'runs' | 'system' | 'refresh'
     | 'search' | 'sun' | 'globe' | 'chevronLeft' | 'chevronRight' | 'copy'
     | 'close' | 'inbox' | 'activity' | 'check' | 'alert' | 'clock' | 'database' | 'folder';
 
@@ -796,6 +908,7 @@ export function icon(name: IconName, className = 'icon'): string {
     const paths: Record<IconName, string> = {
         brand: '<path d="M7 4.5h10a2.5 2.5 0 0 1 2.5 2.5v10a2.5 2.5 0 0 1-2.5 2.5H7A2.5 2.5 0 0 1 4.5 17V7A2.5 2.5 0 0 1 7 4.5Z"/><path d="m8 12 2.4 2.4L16.5 8.5"/>',
         tasks: '<path d="M9 6h11M9 12h11M9 18h11"/><path d="M4 6h.01M4 12h.01M4 18h.01"/>',
+        board: '<rect x="3" y="4" width="5" height="16" rx="1.5"/><rect x="9.5" y="4" width="5" height="11" rx="1.5"/><rect x="16" y="4" width="5" height="16" rx="1.5"/>',
         templates: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 10h18"/><path d="M12 14v3l2 1"/>',
         runs: '<path d="M4 19.5V4.5M4 19.5h16"/><path d="m7 15 3-4 3 2 5-6"/>',
         system: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-1.42 1.42-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.56V20h-2v-.48a1.7 1.7 0 0 0-1.03-1.56 1.7 1.7 0 0 0-1.88.34l-.06.06-1.42-1.42.06-.06A1.7 1.7 0 0 0 9.4 15a1.7 1.7 0 0 0-1.56-1.03H7.5v-2h.34A1.7 1.7 0 0 0 9.4 10a1.7 1.7 0 0 0-.34-1.88L9 8.06l1.42-1.42.06.06a1.7 1.7 0 0 0 1.88.34A1.7 1.7 0 0 0 13.4 5.5V5h2v.5a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.88-.34l.06-.06 1.42 1.42-.06.06A1.7 1.7 0 0 0 19.4 10a1.7 1.7 0 0 0 1.56 1.03h.54v2h-.54A1.7 1.7 0 0 0 19.4 15Z"/>',
@@ -933,6 +1046,24 @@ const STYLES = `
   .panel-completed { margin-bottom:16px; border:1px solid var(--border); border-radius:var(--radius); background:var(--surface); box-shadow:var(--shadow-sm); padding:12px 18px; }
   .panel-completed > summary { cursor:pointer; font-weight:600; color:var(--text-2); }
   .panel-completed > summary:hover { color:var(--text); }
+  .board { display:flex; flex-direction:column; gap:16px; }
+  .lane { border:1px solid var(--border); border-radius:var(--radius); background:var(--surface); box-shadow:var(--shadow-sm); padding:12px 14px; }
+  .lane-head { display:flex; align-items:center; gap:8px; margin-bottom:10px; }
+  .lane-title { font-weight:600; }
+  .lane-count { margin-left:auto; color:var(--text-2); font-size:.85em; }
+  .lane-cols { display:flex; gap:10px; align-items:flex-start; flex-wrap:wrap; }
+  .board-col { flex:1 1 150px; min-width:140px; background:var(--surface-2); border:1px solid var(--border); border-radius:10px; padding:8px; }
+  .board-col-head { display:flex; justify-content:space-between; align-items:center; color:var(--text-2); font-size:.85em; font-weight:600; text-transform:uppercase; letter-spacing:.04em; }
+  .board-col-count { background:var(--surface-3); border-radius:999px; padding:0 7px; }
+  .board-col-empty { padding:4px 0 2px; }
+  .board-card { border:1px solid var(--border); border-radius:8px; background:var(--surface); padding:8px 10px; margin-top:8px; }
+  .board-card-title { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .board-card-status { margin-top:4px; }
+  .board-card-actions { margin-top:8px; }
+  .board-card-actions .btn { padding:3px 10px; font-size:.85em; }
+  .lane-done { margin-top:10px; }
+  .lane-done > summary { cursor:pointer; color:var(--text-2); font-size:.9em; }
+  .lane-done-list { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
   .panel-head { min-height:52px; display:flex; align-items:center; justify-content:space-between; gap:12px; padding:0 18px;
     border-bottom:1px solid var(--border); }
   .panel-head h2,.panel-head h3 { margin:0; font-size:14px; letter-spacing:-.01em; }
@@ -1194,6 +1325,7 @@ const STYLES = `
 
 const PAGE_KEYS: Record<ActiveTab, { title: MessageKey; description: MessageKey }> = {
     tasks: { title: 'page.tasks.title', description: 'page.tasks.description' },
+    board: { title: 'page.board.title', description: 'page.board.description' },
     templates: { title: 'page.templates.title', description: 'page.templates.description' },
     runs: { title: 'page.runs.title', description: 'page.runs.description' },
     system: { title: 'page.system.title', description: 'page.system.description' },
@@ -1250,6 +1382,7 @@ export function renderLayout(options: {
     const page = PAGE_KEYS[activeTab];
     const nav = [
         { id: 'tasks' as const, href: '/', icon: 'tasks' as const },
+        { id: 'board' as const, href: '/board', icon: 'board' as const },
         { id: 'templates' as const, href: '/templates', icon: 'templates' as const },
         { id: 'runs' as const, href: '/runs', icon: 'runs' as const },
         { id: 'system' as const, href: '/system', icon: 'system' as const },

@@ -12,7 +12,7 @@ import {
 import { homedir } from 'os';
 import { basename, dirname, join } from 'path';
 import { db, schema } from '@core/db';
-import type { NewTask, TaskStatus } from '@core/db/schema';
+import type { NewTask, Task, TaskStatus } from '@core/db/schema';
 import { parseDuration } from '@core/duration';
 import { loadOpenCodeCatalog } from '@core/opencode-catalog';
 import { openCodeExecutable } from '@core/opencode-cli';
@@ -39,6 +39,7 @@ import { triggerTaskFromTemplate } from '@gateway/scheduler/job-templates';
 import type { GatewayDiagnostic } from '../daemon/pm2';
 import { getDashboardGatewayDiagnostic } from './gateway-diagnostic';
 import {
+    buildBoardLanes,
     formatDateTime,
     formatFuture,
     formatRelative,
@@ -48,6 +49,8 @@ import {
     runStatusText,
     statusText,
     t,
+    type BoardLane,
+    type DisplayStatus,
     type Locale,
 } from './ui';
 
@@ -56,6 +59,20 @@ const LEGACY_PROJECT_FILTER = '__supertask_legacy__';
 const TASK_STATUSES = new Set<TaskStatus>([
     'pending', 'running', 'done', 'failed', 'dead_letter', 'cancelled',
 ]);
+
+// 每行/每卡一个主动作：运行→暂停、人工/配额暂停→恢复、退避或死信→重试；受阻塞不给（会被依赖校验拒绝）。
+function primaryActionHtml(locale: Locale, task: Task, disp: DisplayStatus): string {
+    if (disp.kind === 'running') {
+        return `<button type="button" class="btn btn-warning" onclick="pauseTask(${task.id})">⏸ ${t(locale, 'action.pause')}</button>`;
+    }
+    if (disp.kind === 'paused') {
+        return `<button type="button" class="btn btn-primary" onclick="retryTask(${task.id})">▶ ${t(locale, 'action.resume')}</button>`;
+    }
+    if (disp.kind === 'retrying' || disp.kind === 'stopped') {
+        return `<button type="button" class="btn btn-warning" onclick="retryTask(${task.id})">${t(locale, 'action.retry')}</button>`;
+    }
+    return '';
+}
 const SESSION_ID_PATTERN = /^ses_[A-Za-z0-9_]+$/;
 const LOOPBACK_HOSTS = ['localhost', '127.0.0.1', '[::1]'];
 const HOST_WITH_PORT_PATTERN = /^(?:\[([^\]]+)\]|([A-Za-z0-9._-]+))(?::([1-9]\d{0,4}))?$/;
@@ -779,15 +796,7 @@ app.get('/', async (c) => {
         const executionActive = latestRun?.status === 'running';
         const batchId = task.batchId?.trim() || null;
         const searchable = esc(`${task.name} ${task.agent} ${task.model ?? ''} ${task.variant ?? ''} ${task.prompt} ${task.cwd ?? ''} ${task.batchId ?? ''} ${task.category ?? ''} ${task.runWindow ?? ''}`);
-        // 每行一个主动作：暂停/恢复时用 Resume、退避或死信用 Retry、阻塞不提供按钮，其余保持默认。
-        let primary = '';
-        if (disp.kind === 'running') {
-            primary = `<button type="button" class="btn btn-warning" onclick="pauseTask(${task.id})">⏸ ${t(locale, 'action.pause')}</button>`;
-        } else if (disp.kind === 'paused') {
-            primary = `<button type="button" class="btn btn-primary" onclick="retryTask(${task.id})">▶ ${t(locale, 'action.resume')}</button>`;
-        } else if (disp.kind === 'retrying' || disp.kind === 'stopped') {
-            primary = `<button type="button" class="btn btn-warning" onclick="retryTask(${task.id})">${t(locale, 'action.retry')}</button>`;
-        }
+        const primary = primaryActionHtml(locale, task, disp);
         const statusTitle = status === 'dead_letter' ? `title="${esc(t(locale, 'status.deadLetterHint'))}"` : '';
         const subtitleParts = [];
         if (disp.subtitle) subtitleParts.push(`<div class="muted small" style="margin-top:5px">${esc(disp.subtitle)}</div>`);
@@ -910,6 +919,76 @@ app.get('/', async (c) => {
       </dialog>`;
 
     return c.html(renderLayout({ locale, activeTab: 'tasks', body }));
+});
+
+// 看板：泳道=批次（cwd+batchId），无批次的任务沿 dependsOn 并入链头，否则单卡；列复用展示层状态词汇。
+app.get('/board', async (c) => {
+    const locale = resolveLocale(c);
+    const requestedCwd = c.req.query('cwd') || '';
+    const legacyProjectFilter = requestedCwd === LEGACY_PROJECT_FILTER;
+    const cwdFilter = legacyProjectFilter ? '' : requestedCwd;
+    const scope = legacyProjectFilter ? { legacyCwd: true as const } : cwdFilter ? { cwd: cwdFilter } : {};
+    const [tasks, statsData, pausedTasks, runningTasks] = await Promise.all([
+        TaskService.list({ limit: 400, ...scope }),
+        TaskService.stats(scope),
+        TaskService.listPaused(),
+        TaskService.list({ status: 'running', limit: 10 }),
+    ]);
+    const config = loadConfig();
+    const maxConcurrency = config.worker.maxConcurrency;
+    const runningCount = statsData.running || 0;
+    const now = Date.now();
+    const lanes = buildBoardLanes(tasks, now);
+
+    const renderCard = (task: Task) => {
+        const disp = resolveDisplayStatus(locale, task, now);
+        const batchId = task.batchId?.trim() || '';
+        return `<article class="board-card">
+          <div class="board-card-title">#${task.id} ${esc(task.name)}</div>
+          <div class="board-card-status"><span class="badge ${disp.badgeClass}">${esc(disp.label)}</span>${disp.subtitle ? `<div class="muted small">${esc(disp.subtitle)}</div>` : ''}</div>
+          <div class="actions task-context"><span class="tag">${esc(task.agent)}</span>${batchId ? `<span class="tag" title="${esc(t(locale, 'template.batchId'))}">${esc(batchId)}</span>` : ''}</div>
+          <div class="actions board-card-actions">
+            ${primaryActionHtml(locale, task, disp)}
+            ${task.runWindow && ['pending', 'failed'].includes(task.status ?? '') ? `<button type="button" class="btn" onclick="runNowTask(${task.id})">${t(locale, 'action.runNow')}</button>` : ''}
+            <button type="button" class="btn" onclick="showDetail(${task.id})">${t(locale, 'action.details')}</button>
+          </div>
+        </article>`;
+    };
+
+    const renderColumn = (key: 'queued' | 'blocked' | 'running' | 'paused' | 'stopped', label: string, items: Task[]) =>
+        `<div class="board-col board-col-${key}"><div class="board-col-head"><span>${esc(label)}</span><span class="board-col-count">${items.length}</span></div>${items.length > 0 ? items.map(renderCard).join('') : '<div class="muted small board-col-empty">—</div>'}</div>`;
+
+    const renderLane = (lane: BoardLane) => {
+        const titleHtml = lane.title.type === 'batch'
+            ? `<span class="tag" title="${esc(t(locale, 'template.batchId'))}">${esc(lane.title.id)}</span>`
+            : lane.title.type === 'chain'
+                ? `<span class="lane-title">${esc(t(locale, 'board.chainLane', { id: lane.title.id }))}</span>`
+                : `<span class="lane-title">#${esc(lane.title.id)}</span>`;
+        const sample = lane.running[0] ?? lane.queued[0] ?? lane.blocked[0] ?? lane.paused[0] ?? lane.stopped[0] ?? lane.done[0] ?? null;
+        const cwdHtml = !cwdFilter && sample?.cwd ? `<span class="tag" title="${esc(sample.cwd)}">${esc(basename(sample.cwd) || sample.cwd)}</span>` : '';
+        const activeTotal = lane.queued.length + lane.blocked.length + lane.running.length + lane.paused.length + lane.stopped.length;
+        return `<section class="lane">
+          <div class="lane-head">${titleHtml}${cwdHtml}<span class="lane-count">${activeTotal}</span></div>
+          <div class="lane-cols">
+            ${renderColumn('queued', t(locale, 'board.queued'), lane.queued)}
+            ${renderColumn('blocked', t(locale, 'board.blocked'), lane.blocked)}
+            ${renderColumn('running', t(locale, 'board.running'), lane.running)}
+            ${renderColumn('paused', t(locale, 'board.paused'), lane.paused)}
+            ${renderColumn('stopped', t(locale, 'board.stopped'), lane.stopped)}
+          </div>
+          ${lane.done.length > 0 ? `<details class="lane-done"><summary>${t(locale, 'board.completed')} (${lane.done.length})</summary><div class="lane-done-list">${lane.done.map((task) => `<span class="badge b-done">#${task.id} ${esc(task.name)}</span>`).join(' ')}</div></details>` : ''}
+        </section>`;
+    };
+
+    const wipBadge = `<span class="badge ${runningCount >= maxConcurrency ? 'b-failed' : 'b-pending'}" title="${esc(t(locale, 'board.wipLimit', { max: maxConcurrency }))}">${esc(t(locale, 'board.wip', { running: runningCount, max: maxConcurrency }))}</span>`;
+    const body = `
+      ${renderPauseBanner(locale, pausedTasks, runningTasks)}
+      <div class="toolbar reveal reveal-delay-1"><div class="filters">${wipBadge}</div></div>
+      ${lanes.length === 0
+            ? `<section class="panel reveal reveal-delay-2">${emptyState(t(locale, 'board.empty'), '')}</section>`
+            : `<div class="board reveal reveal-delay-2">${lanes.map(renderLane).join('')}</div>`}
+    `;
+    return c.html(renderLayout({ locale, activeTab: 'board', body }));
 });
 
 app.get('/templates', async (c) => {
