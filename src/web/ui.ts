@@ -1,3 +1,11 @@
+import type { Task } from '@core/db/schema';
+import { QUOTA_LOG_MARKER } from '@core/quota';
+import {
+    DEPENDENCY_DEAD_LOG_PREFIX,
+    MANUAL_PAUSE_MARKER,
+    PAUSED_RETRY_AFTER_SENTINEL,
+} from '@core/services/task.service';
+
 export type Locale = 'zh-CN' | 'en';
 export type ActiveTab = 'tasks' | 'templates' | 'runs' | 'system';
 
@@ -302,6 +310,13 @@ const ZH = {
     'action.pause': '暂停',
     'action.resume': '继续',
     'feedback.pauseFailed': '暂停失败',
+    'status.blocked': '受阻塞',
+    'status.blockedBy': '依赖 #{id} 不可恢复',
+    'status.pausedManual': '已暂停 · 手动',
+    'status.pausedQuota': '已暂停 · 配额',
+    'status.retrying': '重试等待中',
+    'status.retryingIn': '{time} 后重试',
+    'completed.section': '已完成任务（{count}）',
     'feedback.deleteFailed': '删除失败',
     'feedback.requestFailed': '请求失败',
     'feedback.triggered': '已创建任务 #{id}',
@@ -625,6 +640,13 @@ const EN: Record<MessageKey, string> = {
     'action.pause': 'Pause',
     'action.resume': 'Resume',
     'feedback.pauseFailed': 'Pause failed',
+    'status.blocked': 'Blocked',
+    'status.blockedBy': 'dependency #{id} unrecoverable',
+    'status.pausedManual': 'Paused · manual',
+    'status.pausedQuota': 'Paused · quota',
+    'status.retrying': 'Retrying',
+    'status.retryingIn': 'retry in {time}',
+    'completed.section': 'Completed ({count})',
     'feedback.deleteFailed': 'Delete failed',
     'feedback.requestFailed': 'Request failed',
     'feedback.triggered': 'Task #{id} created',
@@ -652,6 +674,62 @@ export function t(
 ): string {
     const template = (locale === 'en' ? EN : ZH)[key];
     return template.replace(/\{([a-zA-Z]+)\}/g, (_, name: string) => String(values[name] ?? `{${name}}`));
+}
+
+export interface DisplayStatus {
+    /** 展示语义类别：blocked（依赖级联）/ stopped（真实死信）/ paused（ 配额或手动）/ retrying（退避）/ 其余为 DB 原状态。 */
+    kind: 'blocked' | 'stopped' | 'paused' | 'retrying' | string;
+    label: string;
+    subtitle: string;
+    badgeClass: string;
+}
+
+/**
+ * 展示层状态推导：同一 DB 状态按原因细分（依赖级联=受阻塞、哨兵/配额=暂停、
+ * 退避=重试等待中），供队列页与看板复用；不改写 DB 状态语义。
+ */
+export function resolveDisplayStatus(
+    locale: Locale,
+    task: Task,
+    nowMs: number = Date.now(),
+): DisplayStatus {
+    const status = task.status ?? 'pending';
+    if (status === 'dead_letter') {
+        const blockedBy = new RegExp(`${DEPENDENCY_DEAD_LOG_PREFIX}(\\d+)`).exec(task.resultLog ?? '');
+        if (blockedBy) {
+            return {
+                kind: 'blocked',
+                label: t(locale, 'status.blocked'),
+                subtitle: t(locale, 'status.blockedBy', { id: blockedBy[1] }),
+                badgeClass: 'b-dead_letter',
+            };
+        }
+        return { kind: 'stopped', label: t(locale, 'status.dead_letter'), subtitle: '', badgeClass: 'b-dead_letter' };
+    }
+    if (status === 'failed') {
+        const retryAfter = task.retryAfter ?? 0;
+        if (retryAfter === PAUSED_RETRY_AFTER_SENTINEL) {
+            return { kind: 'paused', label: t(locale, 'status.pausedManual'), subtitle: '', badgeClass: 'b-failed' };
+        }
+        if (retryAfter > nowMs && (task.resultLog ?? '').includes(QUOTA_LOG_MARKER)) {
+            return {
+                kind: 'paused',
+                label: t(locale, 'status.pausedQuota'),
+                subtitle: t(locale, 'banner.until', { time: formatDateTime(retryAfter, locale) }),
+                badgeClass: 'b-failed',
+            };
+        }
+        if (retryAfter > nowMs) {
+            return {
+                kind: 'retrying',
+                label: t(locale, 'status.retrying'),
+                subtitle: t(locale, 'status.retryingIn', { time: formatFuture(retryAfter, locale) }),
+                badgeClass: 'b-failed',
+            };
+        }
+        return { kind: 'retrying', label: t(locale, 'status.retrying'), subtitle: '', badgeClass: 'b-failed' };
+    }
+    return { kind: status, label: statusText(locale, status), subtitle: '', badgeClass: `b-${status}` };
 }
 
 export function statusText(locale: Locale, status: string): string {
@@ -844,6 +922,9 @@ const STYLES = `
   .search-box input:focus { border-color:var(--primary); box-shadow:var(--focus); }
   .panel,.card { border:1px solid var(--border); border-radius:var(--radius); background:var(--surface); box-shadow:var(--shadow-sm); }
   .panel { overflow:hidden; margin-bottom:16px; }
+  .panel-completed { margin-bottom:16px; border:1px solid var(--border); border-radius:var(--radius); background:var(--surface); box-shadow:var(--shadow-sm); padding:12px 18px; }
+  .panel-completed > summary { cursor:pointer; font-weight:600; color:var(--text-2); }
+  .panel-completed > summary:hover { color:var(--text); }
   .panel-head { min-height:52px; display:flex; align-items:center; justify-content:space-between; gap:12px; padding:0 18px;
     border-bottom:1px solid var(--border); }
   .panel-head h2,.panel-head h3 { margin:0; font-size:14px; letter-spacing:-.01em; }
@@ -1130,6 +1211,7 @@ function clientMessages(locale: Locale) {
         'runStatus.running', 'runStatus.done', 'runStatus.failed',
         'schedule.cron', 'schedule.recurring', 'schedule.delayed', 'schedule.unknown',
         'duration.seconds', 'duration.minutes', 'duration.hours', 'duration.days',
+        'action.continueSession',
         'feedback.copyFailed',
         'dialog.cancelTask', 'dialog.cancelTaskBody', 'dialog.retryTask', 'dialog.retryTaskBody',
         'dialog.deleteTask', 'dialog.deleteTaskBody', 'dialog.disableTemplate', 'dialog.disableTemplateBody',
@@ -1296,7 +1378,8 @@ export function renderLayout(options: {
         [text('details.retryBackoff'),detailDuration(data.retryBackoffMs)],[text('details.timeout'),detailDuration(data.timeoutMs)],[text('details.lastRun'),detailDate(data.lastRunAt)],[text('details.nextRun'),detailDate(data.nextRunAt)],
         [text('details.createdAt'),detailDate(data.createdAt)],[text('details.updatedAt'),detailDate(data.updatedAt)]
     ]}
-    async function showRecord(url,type){try{const data=await readJson(await fetch(url));const content=document.getElementById('detail-content');content.replaceChildren();const grid=document.createElement('div');grid.className='detail-grid';for(const [label,value,options] of detailFields(type,data))grid.appendChild(detailField(label,value,options));content.appendChild(grid);if(type==='task')content.appendChild(renderDetailHistory(data._runs));document.getElementById('detail-title').textContent=text(type==='task'?'details.taskTitle':type==='run'?'details.runTitle':'details.templateTitle');document.getElementById('detail-raw').textContent=JSON.stringify(data,null,2);document.querySelector('#detail-dialog .detail-raw').open=false;document.getElementById('detail-dialog').showModal()}catch(error){showToast(error.message,'error')}}
+    function detailTaskActions(data){const bar=document.createElement('div');bar.className='actions';bar.style.marginTop='12px';const run=(data._runs||[]).filter(item=>item.sessionId).pop();if(run){const b=document.createElement('button');b.type='button';b.className='btn';b.textContent=text('action.continueSession');b.onclick=()=>copySessionCommand(run.id);bar.appendChild(b)}if(['pending','running','failed'].includes(data.status)){const b=document.createElement('button');b.type='button';b.className='btn btn-danger';b.textContent=text('action.cancel');b.onclick=()=>{document.getElementById('detail-dialog').close();cancelTask(data.id)};bar.appendChild(b)}return bar.children.length?bar:null}
+    async function showRecord(url,type){try{const data=await readJson(await fetch(url));const content=document.getElementById('detail-content');content.replaceChildren();const grid=document.createElement('div');grid.className='detail-grid';for(const [label,value,options] of detailFields(type,data))grid.appendChild(detailField(label,value,options));content.appendChild(grid);if(type==='task'){const bar=detailTaskActions(data);if(bar)content.appendChild(bar);content.appendChild(renderDetailHistory(data._runs));}document.getElementById('detail-title').textContent=text(type==='task'?'details.taskTitle':type==='run'?'details.runTitle':'details.templateTitle');document.getElementById('detail-raw').textContent=JSON.stringify(data,null,2);document.querySelector('#detail-dialog .detail-raw').open=false;document.getElementById('detail-dialog').showModal()}catch(error){showToast(error.message,'error')}}
     const showDetail=id=>showRecord('/api/tasks/'+id,'task');const showRunDetail=id=>showRecord('/api/runs/'+id,'run');const showTemplateDetail=id=>showRecord('/api/templates/'+id,'template');
     function legacyCopy(value){const area=document.createElement('textarea');area.value=value;area.setAttribute('readonly','');area.style.cssText='position:fixed;top:0;left:0;opacity:0;font-size:12pt';document.body.appendChild(area);area.select();area.setSelectionRange(0,value.length);let copied=false;try{copied=document.execCommand('copy')}catch{copied=false}area.remove();return copied}
     async function copyText(value){if(!navigator.clipboard?.writeText)return legacyCopy(value);try{await navigator.clipboard.writeText(value);return true}catch{return legacyCopy(value)}}
@@ -1349,7 +1432,7 @@ export function renderLayout(options: {
     async function deleteTmpl(id){if(!await ask(text('dialog.deleteTemplate'),text('dialog.deleteTemplateBody'),true))return;try{await readJson(await fetch('/api/templates/'+id,{method:'DELETE'}));location.reload()}catch(error){showToast(error.message,'error')}}
     async function triggerTmpl(id){if(!await ask(text('dialog.triggerTemplate'),text('dialog.triggerTemplateBody')))return;try{const data=await readJson(await fetch('/api/templates/'+id+'/trigger',{method:'POST'}));showToast(text('feedback.triggered',{id:data.taskId}));setTimeout(()=>location.reload(),550)}catch(error){showToast(error.message,'error')}}
     function toggleLog(id,button){const panel=document.getElementById('log-'+id);const hidden=!panel.hidden;panel.hidden=hidden;button.setAttribute('aria-expanded',String(!hidden));button.textContent=text(hidden?'action.logs':'action.hideLogs');if(!hidden)requestAnimationFrame(()=>panel.scrollIntoView({block:'nearest',behavior:'smooth'}));}
-    function filterTasks(value){const query=value.trim().toLocaleLowerCase();let visible=0;document.querySelectorAll('[data-task-row]').forEach(row=>{const match=!query||row.dataset.search.toLocaleLowerCase().includes(query);row.hidden=!match;if(match)visible++});const empty=document.getElementById('search-empty');if(empty)empty.hidden=visible!==0;}
+    function filterTasks(value){const query=value.trim().toLocaleLowerCase();const completed=document.querySelector('.panel-completed');if(completed&&query)completed.open=true;let visible=0;document.querySelectorAll('[data-task-row]').forEach(row=>{const match=!query||row.dataset.search.toLocaleLowerCase().includes(query);row.hidden=!match;if(match)visible++});const empty=document.getElementById('search-empty');if(empty)empty.hidden=visible!==0;}
     async function clearDatabase(){if(!await askDanger())return;try{const data=await readJson(await fetch('/api/database/clear',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({confirmation:'CLEAR'})}));showToast(text('feedback.databaseCleared',{path:data.backupPath}));setTimeout(()=>location.reload(),1000)}catch(error){showToast(error.message,'error')}}
     async function confirmGatewayRestart(runningCount=0){const body=runningCount>0?text('dialog.restartGatewayRunningBody',{count:runningCount}):text('dialog.restartGatewayBody');return await ask(text('dialog.restartGateway'),body)}
     async function restartGateway(){try{const data=await readJson(await fetch('/api/gateway/restart',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({confirmation:'RESTART'})}));showToast(text('feedback.restarting'));for(let attempt=0;attempt<120;attempt++){await new Promise(resolve=>setTimeout(resolve,500));try{const status=await readJson(await fetch('/api/gateway/status',{cache:'no-store'}));if(status.pid!==data.previousPid&&status.managed&&status.ready&&!status.restartRequired){location.reload();return true}}catch{}}showToast(text('feedback.restartTimeout'),'error');return false}catch(error){showToast(error.message,'error');return false}}

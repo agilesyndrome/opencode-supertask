@@ -2,7 +2,7 @@
 // 封装所有任务相关的 CRUD 操作
 
 import { db, getSqlite, schema } from '@core/db';
-import { eq, and, desc, asc, sql, isNull, or, type SQL } from 'drizzle-orm';
+import { eq, and, desc, asc, sql, isNull, or, ne, type SQL } from 'drizzle-orm';
 import type { Task, NewTask, TaskStatus } from '@core/db/schema';
 import { computeBackoff } from '@core/backoff';
 import { quotaRetryAfterMs, QUOTA_LOG_MARKER } from '@core/quota';
@@ -19,6 +19,8 @@ let cleanupInvocation = 0;
 
 /** 手动暂停的结果日志标记（横幅/统计用 SQL LIKE 识别）。 */
 export const MANUAL_PAUSE_MARKER = '任务已手动暂停';
+/** 依赖不可恢复级联的结果日志前缀（展示层据此把 dead_letter 区分为"受阻塞"）。 */
+export const DEPENDENCY_DEAD_LOG_PREFIX = '依赖任务 #';
 /** 手动暂停的 retryAfter 哨兵（2100-01-01Z）：仅手动 retry（Play）恢复。 */
 export const PAUSED_RETRY_AFTER_SENTINEL = 4102444800000;
 
@@ -221,7 +223,7 @@ export class TaskService {
                         status: 'dead_letter',
                         finishedAt,
                         retryAfter: null,
-                        resultLog: `依赖任务 #${id} 已进入不可恢复终态`,
+                        resultLog: `${DEPENDENCY_DEAD_LOG_PREFIX}${id} 已进入不可恢复终态`,
                     })
                     .where(blockedDependentsOf(id))
                     .run();
@@ -513,7 +515,7 @@ export class TaskService {
                         status: 'dead_letter',
                         finishedAt: new Date(),
                         retryAfter: null,
-                        resultLog: `依赖任务 #${id} 已进入不可恢复终态`,
+                        resultLog: `${DEPENDENCY_DEAD_LOG_PREFIX}${id} 已进入不可恢复终态`,
                     })
                     .where(blockedDependentsOf(id))
                     .run();
@@ -625,7 +627,7 @@ export class TaskService {
                         status: 'dead_letter',
                         finishedAt,
                         retryAfter: null,
-                        resultLog: `依赖任务 #${taskId} 已进入不可恢复终态`,
+                        resultLog: `${DEPENDENCY_DEAD_LOG_PREFIX}${taskId} 已进入不可恢复终态`,
                     })
                     .where(blockedDependentsOf(taskId))
                     .run();
@@ -696,7 +698,7 @@ export class TaskService {
                         status: 'dead_letter',
                         finishedAt,
                         retryAfter: null,
-                        resultLog: `依赖任务 #${taskId} 已进入不可恢复终态`,
+                        resultLog: `${DEPENDENCY_DEAD_LOG_PREFIX}${taskId} 已进入不可恢复终态`,
                     })
                     .where(blockedDependentsOf(taskId))
                     .run();
@@ -840,7 +842,7 @@ export class TaskService {
                 status: 'dead_letter',
                 finishedAt: new Date(),
                 retryAfter: null,
-                resultLog: `依赖任务 #${prerequisiteId} 已进入不可恢复终态`,
+                resultLog: `${DEPENDENCY_DEAD_LOG_PREFIX}${prerequisiteId} 已进入不可恢复终态`,
             })
             .where(blockedDependentsOf(prerequisiteId))
             .returning({ id: tasks.id });
@@ -881,7 +883,7 @@ export class TaskService {
                     status: 'dead_letter',
                     finishedAt,
                     retryAfter: null,
-                    resultLog: `依赖任务 #${id} 已进入不可恢复终态`,
+                    resultLog: `${DEPENDENCY_DEAD_LOG_PREFIX}${id} 已进入不可恢复终态`,
                 })
                 .where(blockedDependentsOf(id))
                 .run();
@@ -958,7 +960,7 @@ export class TaskService {
                     status: 'dead_letter',
                     finishedAt,
                     retryAfter: null,
-                    resultLog: `依赖任务 #${id} 已进入不可恢复终态`,
+                    resultLog: `${DEPENDENCY_DEAD_LOG_PREFIX}${id} 已进入不可恢复终态`,
                 })
                 .where(blockedDependentsOf(id))
                 .run();
@@ -1083,6 +1085,7 @@ export class TaskService {
 
     static async list(options: {
         status?: TaskStatus;
+        excludeStatus?: TaskStatus;
         activeExecution?: boolean;
         batchId?: string;
         category?: string;
@@ -1105,6 +1108,9 @@ export class TaskService {
             ));
         } else if (options.status) {
             conditions.push(eq(tasks.status, options.status));
+        }
+        if (options.excludeStatus) {
+            conditions.push(ne(tasks.status, options.excludeStatus));
         }
         if (options.batchId !== undefined) {
             const batchId = normalizeTaskBatchId(options.batchId);

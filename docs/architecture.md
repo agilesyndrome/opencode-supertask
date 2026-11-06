@@ -117,6 +117,7 @@ pending / running / failed ──cancel──> cancelled
 - Provider 配额撞限（`provider.quota: Usage limit reached`）不是任务失败：`src/core/quota.ts` 解析重置时刻，任务保存为带 `retryAfter`（重置时刻 + 2 分钟缓冲，封顶 25 小时）的 `failed`，不增加 `retryCount`、不触发 `dead_letter` 与依赖级联；带运行窗口的任务在重置后仍受闲时闸门约束（两个条件都满足才重新领取）。过早恢复会再次撞限并重新暂停，因此解析宁早勿晚；时间戳延迟超出窗口 + 1 小时视为时区错读，回退窗口时长。
 - 手动暂停（Dashboard 横幅 Pause）走 `TaskService.pauseRun`：原子关闭活动 run 并把任务停为带哨兵 `retryAfter`（2100-01-01）的 `failed`，不增加 `retryCount`、不级联依赖；Worker 轮询发现任务被外部结算为 `failed` 后按 cancel 协议终止受管进程组（结算对已关闭 run 是 no-op）。Resume 即普通手动 retry：清空停靠恢复 `pending`。队列页顶部横幅只在存在暂停中或运行中任务时渲染（配额暂停显示重置时刻，手动暂停显示原因），同时提供 Pause/Resume 按钮。
 - 超出预算进入 `dead_letter`，不会自动执行；编辑 `failed` 任务并降低预算导致立即停止重试时，会在同一事务递归收敛整条依赖链。手动 retry 仅在依赖仍存在、同 `cwd` 且仍可恢复或已完成时将状态改回 `pending`，并把 `retryCount` 清零。校验与状态更新使用同一写事务，避免和历史清理并发制造悬空依赖。
+- 展示层状态推导（`src/web/ui.ts` 的 `resolveDisplayStatus`）不改写 DB 状态，只把同一 DB 状态按原因细分：`dead_letter` 且结果日志含"依赖任务 #N 已进入不可恢复终态"级联标记显示为"受阻塞（依赖 #N）"且不提供 Retry（依赖已不可恢复，重试必然被拒）；真实死信显示"已停止"并提供 Retry；`failed` 按哨兵 `retryAfter`（手动暂停）、配额标记（配额暂停，含恢复时刻）和退避（"重试等待中"）区分标签，主动按钮统一为每行一个（运行中→Pause、暂停→Resume、退避/死信→Retry）。"继续会话"只在任务详情中提供；行级不输出。行内 Cancel 移除，取消入口集中在任务详情 danger zone。未筛选视图把 `done` 收进底部可折叠的"已完成（N）"区（N 为该项目 done 总数），Done 筛选芯片仍是平铺列表。
 - 单次任务可指定模型 `variant` 并覆盖 `maxRetries`、`retryBackoffMs` 和 `timeoutMs`；模板克隆时会复制这些字段。
 - 删除不是运行态迁移：`running` 任务或仍存在 `running` 执行记录的任务必须先取消并等待 Worker 关闭 run；仍被 `pending/running/failed/dead_letter` 任务依赖的前置任务也拒绝删除。手动删除和 Watchdog 过期清理都遵守依赖保护，避免制造悬空任务。
 

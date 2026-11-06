@@ -154,7 +154,7 @@ The responsive Dashboard supports English and Chinese, light and dark themes, an
 
 | Page | Purpose |
 | --- | --- |
-| Task Queue | Browse projects, create/edit tasks, see priorities and active state, retry, cancel, or delete safely |
+| Task Queue | Browse projects, create/edit tasks, see reason-aware status labels (Blocked / Paused / Retrying), one primary action per row; cancel from the task details danger zone, and a collapsed “Completed” section for finished work |
 | Scheduled Tasks | Create/edit cron, delayed, and recurring templates; run one immediately without bypassing the queue |
 | Execution Logs | Read structured output, tools, errors, sessions, and the exact historical command |
 | System Status | Inspect active configuration, health, concurrency, and backup-first database maintenance |
