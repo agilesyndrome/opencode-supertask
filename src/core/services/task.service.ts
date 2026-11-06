@@ -5,6 +5,7 @@ import { db, getSqlite, schema } from '@core/db';
 import { eq, and, desc, asc, sql, isNull, or, type SQL } from 'drizzle-orm';
 import type { Task, NewTask, TaskStatus } from '@core/db/schema';
 import { computeBackoff } from '@core/backoff';
+import { quotaRetryAfterMs } from '@core/quota';
 import { validateRunWindow } from '@core/offpeak';
 import { validateTaskWorkingDirectory } from '@core/task-working-directory';
 import {
@@ -476,9 +477,14 @@ export class TaskService {
                 .get();
             if (!current) return null;
 
-            const newRetryCount = (current.retryCount ?? 0) + 1;
+            // 配额撞限：不消耗重试预算，暂停到限额重置；领取路径仍受闲时窗口闸门约束。
+            const quotaPauseMs = quotaRetryAfterMs(log);
+            const newRetryCount = quotaPauseMs === null
+                ? (current.retryCount ?? 0) + 1
+                : (current.retryCount ?? 0);
             const maxRetries = current.maxRetries ?? 3;
-            const isDeadLetter = options?.setDeadLetter ?? newRetryCount > maxRetries;
+            const isDeadLetter = quotaPauseMs === null
+                && (options?.setDeadLetter ?? newRetryCount > maxRetries);
             const failed = tx
                 .update(tasks)
                 .set({
@@ -488,7 +494,7 @@ export class TaskService {
                     retryCount: newRetryCount,
                     retryAfter: isDeadLetter
                         ? null
-                        : (options?.retryAfterMs ?? Date.now() + computeBackoff(
+                        : (quotaPauseMs ?? options?.retryAfterMs ?? Date.now() + computeBackoff(
                             newRetryCount,
                             current.retryBackoffMs ?? 30000,
                         )),
@@ -574,13 +580,18 @@ export class TaskService {
                 .get();
             if (!currentTask || !currentRun) return null;
 
-            const newRetryCount = (currentTask.retryCount ?? 0) + 1;
+            // 配额撞限：不消耗重试预算，暂停到限额重置；领取路径仍受闲时窗口闸门约束。
+            const quotaPauseMs = quotaRetryAfterMs(log);
+            const newRetryCount = quotaPauseMs === null
+                ? (currentTask.retryCount ?? 0) + 1
+                : (currentTask.retryCount ?? 0);
             const maxRetries = currentTask.maxRetries ?? 3;
-            const isDeadLetter = options?.setDeadLetter ?? newRetryCount > maxRetries;
+            const isDeadLetter = quotaPauseMs === null
+                && (options?.setDeadLetter ?? newRetryCount > maxRetries);
             const finishedAt = new Date();
             const retryAfter = isDeadLetter
                 ? null
-                : (options?.retryAfterMs ?? Date.now() + computeBackoff(
+                : (quotaPauseMs ?? options?.retryAfterMs ?? Date.now() + computeBackoff(
                     newRetryCount,
                     currentTask.retryBackoffMs ?? 30000,
                 ));
@@ -648,16 +659,20 @@ export class TaskService {
                 .run();
 
             if (!currentTask) return null;
-            const retryCount = (currentTask.retryCount ?? 0) + 1;
+            // 配额撞限：不消耗重试预算，暂停到限额重置；领取路径仍受闲时窗口闸门约束。
+            const quotaPauseMs = quotaRetryAfterMs(log);
+            const retryCount = quotaPauseMs === null
+                ? (currentTask.retryCount ?? 0) + 1
+                : (currentTask.retryCount ?? 0);
             const maxRetries = currentTask.maxRetries ?? 3;
-            const isDeadLetter = retryCount > maxRetries;
+            const isDeadLetter = quotaPauseMs === null && retryCount > maxRetries;
             const recoveryStatus: 'pending' | 'dead_letter' = isDeadLetter ? 'dead_letter' : 'pending';
-            const retryAfterMs = isDeadLetter
+            const retryAfterMs = quotaPauseMs ?? (isDeadLetter
                 ? null
                 : Date.now() + computeBackoff(
                     retryCount,
                     currentTask.retryBackoffMs ?? 30000,
-                );
+                ));
 
             tx.update(tasks)
                 .set({

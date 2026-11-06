@@ -33,7 +33,7 @@ SuperTask is not another wrapper around cron. Scheduled work becomes an ordinary
 | --- | --- |
 | Durable queue | Tasks and every run survive process and machine restarts in SQLite WAL |
 | Three schedule types | Cron, run-once delay, and fixed recurring interval |
-| Automatic recovery | Retry budgets, exponential backoff, dead-letter state, and manual retry |
+| Automatic recovery | Retry budgets, exponential backoff, dead-letter state, manual retry, and usage-limit pauses until quota reset |
 | Controlled execution | Global concurrency, priority ordering, dependencies, and global batch serialization |
 | Project awareness | Each task keeps its OpenCode project directory, Agent, model, and optional model variant |
 | Safe process handling | Cancel and shutdown wait for the managed OpenCode Unix process group to drain |

@@ -174,6 +174,8 @@ CLI 帮助、`doctor` 和数据库维护的交互式摘要支持 `auto | zh-CN |
 
 默认任务最多执行 4 次：首次执行加 3 次重试。失败退避为 30 秒、60 秒、120 秒，之后按同一指数规则增长，单次最多 30 分钟；基础间隔可由任务或模板覆盖。
 
+Provider 配额撞限（日志含 `provider.quota: Usage limit reached`）不消耗重试预算：任务停在 `failed`，`retryAfter` 指向限额重置时刻（+2 分钟缓冲），到点后自动重新领取；`off-peak` 任务在重置落在峰值时段时继续等待，闲时和重置两个条件都满足才执行。无需人工干预。手动 retry 会清空暂停立即重跑；若限额尚未重置，任务会再次撞限并自动重新暂停（不消耗预算，自愈）。
+
 ```bash
 supertask add -n "生成报告" -a "reporter" -p "汇总本周进展" \
   --model openai/gpt-5.6-sol --variant xhigh \
