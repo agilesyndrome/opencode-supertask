@@ -155,6 +155,7 @@ The responsive Dashboard supports English and Chinese, light and dark themes, an
 | Page | Purpose |
 | --- | --- |
 | Task Queue | Browse projects, create/edit tasks, see reason-aware status labels (Blocked / Paused / Retrying), one primary action per row; cancel from the task details danger zone, a collapsed “Completed” section for finished work, and Fork from task details for done/stopped tasks |
+| Board | Swim-lane view of active work: lanes grouped by project + batch (dependency chains fall back to the chain head, otherwise single cards), columns reusing the queue labels (Queued / Blocked / Running / Paused / Stopped) with a collapsed per-lane Completed section, and a WIP badge comparing running tasks with the worker `maxConcurrency` |
 | Scheduled Tasks | Create/edit cron, delayed, and recurring templates; run one immediately without bypassing the queue |
 | Execution Logs | Read structured output, tools, errors, sessions, and the exact historical command |
 | System Status | Inspect active configuration, health, concurrency, and backup-first database maintenance |
