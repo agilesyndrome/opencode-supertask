@@ -1004,7 +1004,7 @@ app.get('/api/events', (c) => {
 
 // 成本/用量聚合：结算过的执行按 本地日 × 项目 × 模型 分组（null 成本行只计入次数，不计金额）。
 const COST_SELECT = {
-    day: sql<string>`date(${schema.taskRuns.startedAt} / 1000, 'unixepoch', 'localtime')`,
+    day: sql<string>`date(${schema.taskRuns.startedAt}, 'unixepoch', 'localtime')`,
     cwd: schema.tasks.cwd,
     model: sql<string>`coalesce(${schema.taskRuns.model}, '')`,
     runs: sql<number>`count(*)`,
