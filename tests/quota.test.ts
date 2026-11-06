@@ -145,4 +145,13 @@ describe('配额暂停 × TaskService', () => {
         expect(recovery?.retryCount).toBe(0);
         expect(recovery?.retryAfterMs).toBeGreaterThan(Date.now());
     });
+
+    test('--format json 的错误事件同样识别为配额撞限并解析重置时刻', async () => {
+        const jsonLog = '{"type":"error","error":{"type":"provider.quota","message":"Usage limit reached for 5 hour. Your limit will reset at 2026-11-07 07:50:29","status":429}}';
+        expect(isQuotaUsageLimitError(jsonLog)).toBe(true);
+        const retryAfter = quotaRetryAfterMs(jsonLog);
+        // 断言与宿主时区无关：识别为配额、且总是暂停到未来某个时刻（TZ 偏差时回退窗口时长，宁早勿晚）。
+        expect(retryAfter).not.toBeNull();
+        expect(retryAfter!).toBeGreaterThan(Date.now());
+    });
 });

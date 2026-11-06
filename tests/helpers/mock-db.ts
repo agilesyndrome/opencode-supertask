@@ -66,7 +66,12 @@ export function setupTestDb() {
             heartbeat_at INTEGER,
             worker_pid INTEGER,
             child_pid INTEGER,
-            launch_protocol TEXT
+            launch_protocol TEXT,
+            cost_usd REAL,
+            input_tokens INTEGER,
+            output_tokens INTEGER,
+            reasoning_tokens INTEGER,
+            cache_read_tokens INTEGER
         );
     `);
     sqlite.exec('CREATE INDEX tasks_depends_on_status_idx ON tasks(depends_on, status);');

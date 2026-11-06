@@ -1,7 +1,7 @@
 // 任务表 Schema
 // 用于存储 AI Agent 的通用任务队列
 
-import { index, sqliteTable, text, integer } from 'drizzle-orm/sqlite-core';
+import { index, real, sqliteTable, text, integer } from 'drizzle-orm/sqlite-core';
 
 export const tasks = sqliteTable('tasks', {
     id: integer('id').primaryKey({ autoIncrement: true }),
@@ -88,6 +88,13 @@ export const taskRuns = sqliteTable('task_runs', {
     workerPid: integer('worker_pid'),
     childPid: integer('child_pid'),
     launchProtocol: text('launch_protocol'),
+
+    // 参考用成本/用量：结算时从 OpenCode 会话采集（null=未采集；仅供报表，绝不参与调度/重试决策）
+    costUsd: real('cost_usd'),
+    inputTokens: integer('input_tokens'),
+    outputTokens: integer('output_tokens'),
+    reasoningTokens: integer('reasoning_tokens'),
+    cacheReadTokens: integer('cache_read_tokens'),
 }, (table) => [
     index('task_runs_task_started_idx').on(table.taskId, table.startedAt, table.id),
     index('task_runs_status_heartbeat_idx').on(table.status, table.heartbeatAt),

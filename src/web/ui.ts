@@ -7,7 +7,7 @@ import {
 } from '@core/services/task.service';
 
 export type Locale = 'zh-CN' | 'en';
-export type ActiveTab = 'tasks' | 'board' | 'templates' | 'runs' | 'system';
+export type ActiveTab = 'tasks' | 'board' | 'costs' | 'templates' | 'runs' | 'system';
 
 const ZH = {
     'app.name': 'SuperTask',
@@ -20,6 +20,7 @@ const ZH = {
     'nav.runs': '执行记录',
     'nav.system': '系统',
     'nav.board': '看板',
+    'nav.costs': '费用',
     'page.board.title': '看板',
     'page.board.description': '按项目与批次分栏查看进行中的任务，关注 WIP 与受阻塞的链路。',
     'page.tasks.title': '任务队列',
@@ -30,6 +31,8 @@ const ZH = {
     'page.runs.description': '追踪每次 Agent 执行的状态、耗时、心跳与输出。',
     'page.system.title': '系统设置',
     'page.system.description': '调整 Gateway 运行参数，检查实时任务并管理本地数据。',
+    'page.costs.title': '费用报表',
+    'page.costs.description': '按天、项目与模型查看参考成本和用量，评估模型阶梯的利用率。',
     'board.queued': '排队中',
     'board.blocked': '受阻塞',
     'board.running': '运行中',
@@ -172,6 +175,19 @@ const ZH = {
     'system.moveDown': '下移',
     'system.removeRung': '移除',
     'system.ladderMax': '最多 8 档',
+    'empty.costs': '还没有可显示的费用数据。',
+    'system.days_7': '近 7 天',
+    'system.days_30': '近 30 天',
+    'system.day': '日期',
+    'system.runs': '次数',
+    'system.tokensIn': '输入 tokens',
+    'system.tokensOut': '输出 tokens',
+    'system.tokensReasoning': '推理 tokens',
+    'system.tokensCache': '缓存读 tokens',
+    'system.costUsd': '成本 (USD)',
+    'system.ladderUtilization': '模型阶梯利用率',
+    'system.costsCaveat': '成本为 OpenCode 结算时的参考值（models.dev 价格，可能不含子 Agent 的用量）；免费/套餐档位显示 $0 属预期，利用率看次数与 tokens。',
+    'system.costsHint': '尚未采集到已结算的成本数据。',
     'system.ladderInvalid': '存在未填完整的梯队条目：provider 与 model 两部分都要填写（provider 不能含 “/”）',
     'system.ladderHelp': '建议来自你各任务项目的 OpenCode 目录并集；免费与订阅额度也是“provider”：例如 opencode（OpenCode Zen，含 glm-5.3-flash-free 等免费模型）、zai-coding-plan（编程套餐）、openrouter（按量付费）。右侧 model 列表形如 厂商/模型（如 google/...、z-ai/...），这是提供方内部的模型命名，正常现象。也可终端运行 opencode models 查看全量。',
     'system.milliseconds': '毫秒',
@@ -381,6 +397,7 @@ const EN: Record<MessageKey, string> = {
     'nav.runs': 'Runs',
     'nav.system': 'System',
     'nav.board': 'Board',
+    'nav.costs': 'Costs',
     'page.board.title': 'Board',
     'page.board.description': 'Active work grouped by project and batch, with WIP and blocked chains at a glance.',
     'page.tasks.title': 'Task queue',
@@ -391,6 +408,8 @@ const EN: Record<MessageKey, string> = {
     'page.runs.description': 'Inspect the status, duration, heartbeat, and output of every agent run.',
     'page.system.title': 'System settings',
     'page.system.description': 'Tune Gateway behavior, inspect active work, and manage local data.',
+    'page.costs.title': 'Cost report',
+    'page.costs.description': 'Reference cost and usage by day, project, and model — how well each ladder rung is pulling its weight.',
     'board.queued': 'Queued',
     'board.blocked': 'Blocked',
     'board.running': 'Running',
@@ -487,6 +506,7 @@ const EN: Record<MessageKey, string> = {
     'pagination.next': 'Next',
     'pagination.summary': 'Page {page} of {pages} · {total} items',
     'empty.tasks': 'Your queue is empty',
+    'empty.costs': 'No cost data to show yet.',
     'empty.tasksHint': 'Select “New task”, or use the OpenCode plugin or supertask add.',
     'empty.templates': 'No scheduled tasks yet',
     'empty.templatesHint': 'Select “New scheduled task” to create one.',
@@ -533,6 +553,18 @@ const EN: Record<MessageKey, string> = {
     'system.moveDown': 'Move down',
     'system.removeRung': 'Remove',
     'system.ladderMax': 'Maximum 8 rungs',
+    'system.days_7': 'Last 7 days',
+    'system.days_30': 'Last 30 days',
+    'system.day': 'Day',
+    'system.runs': 'Runs',
+    'system.tokensIn': 'Input tokens',
+    'system.tokensOut': 'Output tokens',
+    'system.tokensReasoning': 'Reasoning tokens',
+    'system.tokensCache': 'Cache-read tokens',
+    'system.costUsd': 'Cost (USD)',
+    'system.ladderUtilization': 'Ladder utilization',
+    'system.costsCaveat': 'Costs are reference values captured at settlement (models.dev prices; sub-agent usage may be undercounted). Free/plan rungs show $0 by design — judge them by runs and tokens.',
+    'system.costsHint': 'No settled cost data captured yet.',
     'system.ladderInvalid': 'Some ladder rungs are incomplete: fill in both provider and model (provider cannot contain “/”)',
     'system.ladderHelp': 'Suggestions come from the OpenCode catalogs of all your task projects; free and subscription quotas are providers too — e.g. opencode (OpenCode Zen, includes glm-5.3-flash-free and other free models), zai-coding-plan (coding plan), openrouter (pay per use). The right-hand model list looks like vendor/model (google/…, z-ai/…) — that is the provider naming inside the provider. Run opencode models in a terminal for the full list.',
     'system.milliseconds': 'ms',
@@ -999,7 +1031,7 @@ export function formatDateTime(value: Date | number | null, locale: Locale): str
     }).format(date);
 }
 
-type IconName = 'brand' | 'tasks' | 'board' | 'templates' | 'runs' | 'system' | 'refresh'
+type IconName = 'brand' | 'tasks' | 'board' | 'costs' | 'templates' | 'runs' | 'system' | 'refresh'
     | 'search' | 'sun' | 'globe' | 'chevronLeft' | 'chevronRight' | 'copy'
     | 'close' | 'inbox' | 'activity' | 'check' | 'alert' | 'clock' | 'database' | 'folder';
 
@@ -1008,6 +1040,7 @@ export function icon(name: IconName, className = 'icon'): string {
         brand: '<path d="M7 4.5h10a2.5 2.5 0 0 1 2.5 2.5v10a2.5 2.5 0 0 1-2.5 2.5H7A2.5 2.5 0 0 1 4.5 17V7A2.5 2.5 0 0 1 7 4.5Z"/><path d="m8 12 2.4 2.4L16.5 8.5"/>',
         tasks: '<path d="M9 6h11M9 12h11M9 18h11"/><path d="M4 6h.01M4 12h.01M4 18h.01"/>',
         board: '<rect x="3" y="4" width="5" height="16" rx="1.5"/><rect x="9.5" y="4" width="5" height="11" rx="1.5"/><rect x="16" y="4" width="5" height="16" rx="1.5"/>',
+        costs: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.8v8.4M14.8 9.6c-.6-.8-1.6-1.3-2.8-1.3-1.7 0-3 .9-3 2.1 0 2.8 6 1.4 6 4.2 0 1.2-1.3 2.1-3 2.1-1.2 0-2.2-.5-2.8-1.3"/>',
         templates: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 10h18"/><path d="M12 14v3l2 1"/>',
         runs: '<path d="M4 19.5V4.5M4 19.5h16"/><path d="m7 15 3-4 3 2 5-6"/>',
         system: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-1.42 1.42-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.56V20h-2v-.48a1.7 1.7 0 0 0-1.03-1.56 1.7 1.7 0 0 0-1.88.34l-.06.06-1.42-1.42.06-.06A1.7 1.7 0 0 0 9.4 15a1.7 1.7 0 0 0-1.56-1.03H7.5v-2h.34A1.7 1.7 0 0 0 9.4 10a1.7 1.7 0 0 0-.34-1.88L9 8.06l1.42-1.42.06.06a1.7 1.7 0 0 0 1.88.34A1.7 1.7 0 0 0 13.4 5.5V5h2v.5a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.88-.34l.06-.06 1.42 1.42-.06.06A1.7 1.7 0 0 0 19.4 10a1.7 1.7 0 0 0 1.56 1.03h.54v2h-.54A1.7 1.7 0 0 0 19.4 15Z"/>',
@@ -1439,6 +1472,7 @@ const STYLES = `
 const PAGE_KEYS: Record<ActiveTab, { title: MessageKey; description: MessageKey }> = {
     tasks: { title: 'page.tasks.title', description: 'page.tasks.description' },
     board: { title: 'page.board.title', description: 'page.board.description' },
+    costs: { title: 'page.costs.title', description: 'page.costs.description' },
     templates: { title: 'page.templates.title', description: 'page.templates.description' },
     runs: { title: 'page.runs.title', description: 'page.runs.description' },
     system: { title: 'page.system.title', description: 'page.system.description' },
@@ -1498,6 +1532,7 @@ export function renderLayout(options: {
     const nav = [
         { id: 'tasks' as const, href: '/', icon: 'tasks' as const },
         { id: 'board' as const, href: '/board', icon: 'board' as const },
+        { id: 'costs' as const, href: '/costs', icon: 'costs' as const },
         { id: 'templates' as const, href: '/templates', icon: 'templates' as const },
         { id: 'runs' as const, href: '/runs', icon: 'runs' as const },
         { id: 'system' as const, href: '/system', icon: 'system' as const },

@@ -1,5 +1,5 @@
 import { Hono, type Context } from 'hono';
-import { desc, eq, sql } from 'drizzle-orm';
+import { desc, eq, and, gte, isNotNull, ne, sql } from 'drizzle-orm';
 import {
     existsSync,
     mkdirSync,
@@ -1000,6 +1000,102 @@ app.get('/api/events', (c) => {
     return new Response(stream, {
         headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' },
     });
+});
+
+// 成本/用量聚合：结算过的执行按 本地日 × 项目 × 模型 分组（null 成本行只计入次数，不计金额）。
+const COST_SELECT = {
+    day: sql<string>`date(${schema.taskRuns.startedAt} / 1000, 'unixepoch', 'localtime')`,
+    cwd: schema.tasks.cwd,
+    model: sql<string>`coalesce(${schema.taskRuns.model}, '')`,
+    runs: sql<number>`count(*)`,
+    costUsd: sql<number>`coalesce(sum(${schema.taskRuns.costUsd}), 0)`,
+    inputTokens: sql<number>`coalesce(sum(${schema.taskRuns.inputTokens}), 0)`,
+    outputTokens: sql<number>`coalesce(sum(${schema.taskRuns.outputTokens}), 0)`,
+    reasoningTokens: sql<number>`coalesce(sum(${schema.taskRuns.reasoningTokens}), 0)`,
+    cacheReadTokens: sql<number>`coalesce(sum(${schema.taskRuns.cacheReadTokens}), 0)`,
+};
+
+async function costRows(days: number, cwdFilter: string) {
+    const settled = and(ne(schema.taskRuns.status, 'running'), isNotNull(schema.taskRuns.startedAt), gte(schema.taskRuns.startedAt, new Date(Date.now() - days * 86_400_000)));
+    const rows = await db
+        .select(COST_SELECT)
+        .from(schema.taskRuns)
+        .innerJoin(schema.tasks, eq(schema.taskRuns.taskId, schema.tasks.id))
+        .where(cwdFilter ? and(settled, eq(schema.tasks.cwd, cwdFilter)) : settled)
+        .groupBy(sql`1, 2, 3`)
+        .orderBy(sql`1 desc, 2 asc, 3 asc`);
+    return rows.map((row) => ({
+        day: row.day ?? '',
+        cwd: row.cwd ?? '',
+        model: row.model || '',
+        runs: Number(row.runs),
+        costUsd: Number(row.costUsd),
+        inputTokens: Number(row.inputTokens),
+        outputTokens: Number(row.outputTokens),
+        reasoningTokens: Number(row.reasoningTokens),
+        cacheReadTokens: Number(row.cacheReadTokens),
+    }));
+}
+
+app.get('/api/costs', async (c) => {
+    const days = parsePositiveInteger(c.req.query('days') || '7') ?? 7;
+    if (days < 1 || days > 90) return c.text('invalid days', 400);
+    return c.json({ days, rows: await costRows(days, c.req.query('cwd') || '') });
+});
+
+// 费用报表：本地日 × 项目 × 模型的参考成本/用量视图。
+app.get('/costs', async (c) => {
+    const locale = resolveLocale(c);
+    const days = c.req.query('days') === '30' ? 30 : 7;
+    const cwdFilter = c.req.query('cwd') || '';
+    const [rows, projects] = await Promise.all([
+        costRows(days, cwdFilter),
+        TaskService.projectSummaries(1000),
+    ]);
+    const totals = new Map<string, { runs: number; costUsd: number; outputTokens: number; inputTokens: number }>();
+    for (const row of rows) {
+        const entry = totals.get(row.model) ?? { runs: 0, costUsd: 0, outputTokens: 0, inputTokens: 0 };
+        entry.runs += row.runs;
+        entry.costUsd += row.costUsd;
+        entry.outputTokens += row.outputTokens;
+        entry.inputTokens += row.inputTokens;
+        totals.set(row.model, entry);
+    }
+    const modelSummary = [...totals.entries()]
+        .sort((a, b) => b[1].costUsd - a[1].costUsd || b[1].runs - a[1].runs)
+        .map(([model, entry]) => `<div class="overview-item"><span>${esc(model || t(locale, 'status.unknown'))}</span><strong style="color:var(--blue)">${entry.runs}</strong><span class="muted small">$${entry.costUsd.toFixed(2)}</span></div>`)
+        .join('');
+    const projectChips = [
+        `<a class="filter-chip ${cwdFilter === '' ? 'active' : ''}" href="/costs?days=${days}">${t(locale, 'projects.all')}</a>`,
+        ...projects.map((project) => `<a class="filter-chip ${cwdFilter === project.cwd ? 'active' : ''}" href="/costs?days=${days}&cwd=${encodeURIComponent(project.cwd)}" title="${esc(project.cwd)}">${esc(basename(project.cwd) || project.cwd)}</a>`),
+    ].join('');
+    const dayChips = [7, 30].map((option) => `<a class="filter-chip ${days === option ? 'active' : ''}" href="/costs?days=${option}${cwdFilter ? `&cwd=${encodeURIComponent(cwdFilter)}` : ''}">${option === 7 ? t(locale, 'system.days_7') : t(locale, 'system.days_30')}</a>`).join('');
+    const tableRows = rows.map((row) => `<tr>
+          <td class="faint">${esc(row.day)}</td>
+          <td>${esc(row.cwd ? (basename(row.cwd) || row.cwd) : t(locale, 'projects.legacy'))}</td>
+          <td>${esc(row.model || '—')}</td>
+          <td class="small">${row.runs}</td>
+          <td class="small muted">${row.inputTokens.toLocaleString(locale === 'en' ? 'en-US' : 'zh-CN')}</td>
+          <td class="small muted">${row.outputTokens.toLocaleString(locale === 'en' ? 'en-US' : 'zh-CN')}</td>
+          <td class="small muted">${row.reasoningTokens.toLocaleString(locale === 'en' ? 'en-US' : 'zh-CN')}</td>
+          <td class="small muted">${row.cacheReadTokens.toLocaleString(locale === 'en' ? 'en-US' : 'zh-CN')}</td>
+          <td class="small">$${row.costUsd.toFixed(4)}</td>
+        </tr>`).join('');
+    const table = rows.length === 0
+        ? emptyState(t(locale, 'empty.costs'), t(locale, 'system.costsHint'))
+        : `<div class="table-wrap"><table class="responsive-table">
+            <thead><tr><th>${t(locale, 'system.day')}</th><th>${t(locale, 'projects.title')}</th><th>${t(locale, 'table.model')}</th><th>${t(locale, 'system.runs')}</th><th>${t(locale, 'system.tokensIn')}</th><th>${t(locale, 'system.tokensOut')}</th><th>${t(locale, 'system.tokensReasoning')}</th><th>${t(locale, 'system.tokensCache')}</th><th>${t(locale, 'system.costUsd')}</th></tr></thead>
+            <tbody>${tableRows}</tbody>
+          </table></div>`;
+    const body = `
+      <div class="toolbar reveal reveal-delay-1"><div class="filters">${dayChips}</div></div>
+      <section class="panel reveal reveal-delay-1">
+        <div class="panel-head"><div><h2>${t(locale, 'system.ladderUtilization')}</h2><p>${t(locale, 'system.costsCaveat')}</p></div></div>
+        <div class="overview-grid">${modelSummary || `<p class="muted small">${t(locale, 'empty.costs')}</p>`}</div>
+      </section>
+      <div class="toolbar reveal reveal-delay-2"><div class="filters">${projectChips}</div></div>
+      <section class="panel reveal reveal-delay-2">${table}</section>`;
+    return c.html(renderLayout({ locale, activeTab: 'costs', body, pageData: undefined }));
 });
 
 // 看板：泳道=批次（cwd+batchId），无批次的任务沿 dependsOn 并入链头，否则单卡；列复用展示层状态词汇。

@@ -2,6 +2,7 @@ import { db, schema } from '@core/db';
 import { eq, desc, and, inArray } from 'drizzle-orm';
 import type { TaskRun, NewTaskRun } from '@core/db/schema';
 import { isProcessAlive } from '@core/process-control';
+import type { SessionCostSample } from '@core/opencode-server';
 
 const { tasks, taskRuns } = schema;
 
@@ -110,6 +111,17 @@ export class TaskRunService {
             .where(and(eq(taskRuns.id, id), eq(taskRuns.status, 'running')))
             .returning();
         return result[0] || null;
+    }
+
+    /** 参考用成本/用量落库（结算后调用；纯写入，无业务副作用）。 */
+    static async recordCost(runId: number, sample: SessionCostSample): Promise<void> {
+        await db.update(taskRuns).set({
+            costUsd: sample.costUsd,
+            inputTokens: sample.inputTokens,
+            outputTokens: sample.outputTokens,
+            reasoningTokens: sample.reasoningTokens,
+            cacheReadTokens: sample.cacheReadTokens,
+        }).where(eq(taskRuns.id, runId));
     }
 
     static async getById(id: number): Promise<TaskRun | null> {

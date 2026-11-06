@@ -8,6 +8,8 @@
  */
 
 const QUOTA_ERROR_RE = /provider\.quota:\s*Usage limit reached/i;
+/** `--format json` 退出日志的错误事件形状：{"type":"provider.quota","message":"Usage limit reached …"}。 */
+const QUOTA_JSON_TYPE_RE = /"type"\s*:\s*"provider\.quota"/;
 /** 结果日志中的稳定标记：用于 SQL LIKE 识别配额暂停的任务（横幅/统计）。 */
 export const QUOTA_LOG_MARKER = 'provider.quota';
 const WINDOW_RE = /Usage limit reached for (\d+)\s*(minute|hour|day)/i;
@@ -21,7 +23,10 @@ const RESET_BUFFER_MS = 2 * 60 * 1000;
 const MAX_QUOTA_PAUSE_MS = 25 * 60 * 60 * 1000;
 
 export function isQuotaUsageLimitError(log: string | null | undefined): boolean {
-    return typeof log === 'string' && QUOTA_ERROR_RE.test(log);
+    if (typeof log !== 'string') return false;
+    // 两种形状：文本内联（provider.quota: Usage limit reached …）与 --format json 的事件
+    // （"type":"provider.quota" + 独立的 message 字段）。两者都带同样的窗口/重置文案。
+    return QUOTA_ERROR_RE.test(log) || (QUOTA_JSON_TYPE_RE.test(log) && WINDOW_RE.test(log));
 }
 
 /**

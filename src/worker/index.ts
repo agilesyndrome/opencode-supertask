@@ -1,4 +1,5 @@
 import { isModelCreditsExhaustedError, isQuotaUsageLimitError, MODEL_LADDER_LOG_MARKER } from '@core/quota';
+import { fetchSessionCost } from '@core/opencode-server';
 import { TaskService } from '@core/services/task.service';
 import { TaskRunService } from '@core/services/task-run.service';
 import { isOffPeakNow } from '@core/offpeak';
@@ -607,9 +608,23 @@ export class WorkerEngine {
             ? `${failure}${output ? `\n${output}` : ''}`
             : output;
 
+        // 结算时采集参考用成本/用量（best-effort：失败=null，不阻塞、不重试、不参与任何调度决策）。
+        const sessionCost = currentRun?.sessionId
+            ? await fetchSessionCost(currentRun.sessionId)
+            : null;
+        const settleCost = async (runId: number): Promise<void> => {
+            if (!sessionCost) return;
+            try {
+                await TaskRunService.recordCost(runId, sessionCost);
+            } catch (error) {
+                this.logError('run cost capture failed', error instanceof Error ? error.message : String(error), entry.task.id);
+            }
+        };
+
         if (code === 0 && !failure) {
             const completed = await TaskService.completeRun(entry.task.id, entry.runId, log);
             if (completed) {
+                await settleCost(entry.runId);
                 console.log(JSON.stringify({
                     ts: new Date().toISOString(),
                     level: 'info',
@@ -635,6 +650,9 @@ export class WorkerEngine {
             }));
             this.releaseBatch(entry.task);
             return;
+        }
+        if (failed) {
+            await settleCost(entry.runId);
         }
         if (!failed) {
             await TaskRunService.fail(
@@ -801,8 +819,9 @@ export class WorkerEngine {
     }
 
     /**
-     * 模型阶梯决策：仅对未显式选择模型（'default'）或已处于阶梯上的任务生效；
-     * 返回下一档模型，无阶梯/已到末档/用户显式模型不在梯子上时返回 undefined（维持既有配额暂停）。
+     * 模型阶梯决策：额度受限（usage-limit 或信用耗尽）时，当前模型在梯队上 → 下一档；
+     * 当前模型不在梯队上（含 Agent 默认、用户显式指定的其它模型）→ 从最便宜的一档开始。
+     * 已到末档返回 undefined（回退到既有配额暂停）。
      */
     private ladderShiftFor(task: Task, log: string): { nextModel: string; note: string } | undefined {
         const quotaFamily = isQuotaUsageLimitError(log) || isModelCreditsExhaustedError(log);
@@ -811,13 +830,12 @@ export class WorkerEngine {
         if (list.length === 0) return undefined;
         const explicit = task.model && task.model !== 'default' ? task.model : null;
         const index = explicit ? list.indexOf(explicit) : -1;
-        if (explicit && index === -1) return undefined;
         const nextModel = list[index + 1];
         if (!nextModel) return undefined;
         const from = explicit ?? 'Agent 默认';
         return {
             nextModel,
-            note: `${MODEL_LADDER_LOG_MARKER}: ${from} → ${nextModel}（模型额度受限，已切换下一档继续；不消耗重试预算）`,
+            note: `${MODEL_LADDER_LOG_MARKER}: ${from} → ${nextModel}（模型额度受限，已切换继续；不消耗重试预算）`,
         };
     }
 
