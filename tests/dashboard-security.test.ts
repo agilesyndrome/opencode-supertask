@@ -342,7 +342,9 @@ describe('Dashboard 安全边界', () => {
         expect(legacyHtml).toContain('旧版未分组');
         expect(legacyHtml).not.toContain('项目任务 100');
         expect(legacyHtml).not.toContain(`openTaskEditor(${legacyTask.id})`);
-        expect(legacyHtml).toContain(`cancelTask(${legacyTask.id})`);
+        // Phase 0：行级 Cancel 移到详情 danger zone，行仍保留 Details 入口
+        expect(legacyHtml).not.toContain(`cancelTask(${legacyTask.id})`);
+        expect(legacyHtml).toContain(`showDetail(${legacyTask.id})`);
     });
 
     test('运行中视图包含已取消但进程尚未退出的任务，并明确提示占用并发', async () => {
@@ -584,8 +586,10 @@ describe('Dashboard 安全边界', () => {
 
         const tasksHtml = await (await dashboardApp.request('http://localhost/')).text();
         const runsHtml = await (await dashboardApp.request('http://localhost/runs')).text();
-        expect(tasksHtml).toContain(`copySessionCommand(${run.id})`);
         expect(runsHtml).toContain(`copySessionCommand(${run.id})`);
+        // 任务队列页：行级"继续会话"移入 Details 折叠后的动作栏（客户端按 run 渲染），SSR 不再逐行输出
+        expect(tasksHtml).not.toContain(`copySessionCommand(${run.id})`);
+        expect(tasksHtml).toContain("text('action.continueSession')");
         expect(runsHtml).toContain('abc***XYZ');
         expect(tasksHtml).not.toContain('ses_abc123XYZ');
         expect(runsHtml).not.toContain('ses_abc123XYZ');

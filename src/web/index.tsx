@@ -44,6 +44,7 @@ import {
     formatRelative,
     icon,
     renderLayout,
+    resolveDisplayStatus,
     runStatusText,
     statusText,
     t,
@@ -688,15 +689,17 @@ app.get('/', async (c) => {
     const limit = 50;
     const offset = (page - 1) * limit;
 
-    const [tasks, statsData, globalStats, projects, globalRunning, legacyStats, legacyRunning, pausedTasks, runningTasks] = await Promise.all([
+    const [tasks, doneTasks, statsData, globalStats, projects, globalRunning, legacyStats, legacyRunning, pausedTasks, runningTasks] = await Promise.all([
         TaskService.list({
             limit,
             offset,
             ...(parsedStatus === 'running'
                 ? { activeExecution: true }
-                : parsedStatus ? { status: parsedStatus } : {}),
+                : parsedStatus ? { status: parsedStatus } : { excludeStatus: 'done' }),
             ...(legacyProjectFilter ? { legacyCwd: true } : cwdFilter ? { cwd: cwdFilter } : {}),
         }),
+        // 未筛选视图把 done 收进可折叠的 Completed 区，另取最近 10 条展示（筛选时忽略该结果）。
+        TaskService.list({ status: 'done', limit: 10, ...(legacyProjectFilter ? { legacyCwd: true } : cwdFilter ? { cwd: cwdFilter } : {}) }),
         TaskService.stats(legacyProjectFilter ? { legacyCwd: true } : cwdFilter ? { cwd: cwdFilter } : {}),
         TaskService.stats(),
         TaskService.projectSummaries(1000),
@@ -728,7 +731,7 @@ app.get('/', async (c) => {
     counts.doneSinceMorning = await TaskService.countDoneSince(morning);
     const filteredTotal = parsedStatus === 'running'
         ? selectedRunning
-        : parsedStatus ? Number(statsData[parsedStatus] ?? 0) : counts.total;
+        : parsedStatus ? Number(statsData[parsedStatus] ?? 0) : counts.total - counts.done;
     const totalPages = Math.max(1, Math.ceil(filteredTotal / limit));
     if (page > totalPages) {
         const params = new URLSearchParams({ page: String(totalPages) });
@@ -759,39 +762,61 @@ app.get('/', async (c) => {
         return `<a href="${esc(href)}" class="filter-chip ${statusFilter === status ? 'active' : ''}">${label}</a>`;
     }).join('');
 
-    const rows = tasks.map((task) => {
+    const buildRows = (taskRows: typeof tasks) => taskRows.map((task) => {
         const status = safeStatus(task.status);
+        const disp = resolveDisplayStatus(locale, task, Date.now());
         const latestRun = latestRuns.get(task.id);
         const executionActive = latestRun?.status === 'running';
         const batchId = task.batchId?.trim() || null;
         const searchable = esc(`${task.name} ${task.agent} ${task.model ?? ''} ${task.variant ?? ''} ${task.prompt} ${task.cwd ?? ''} ${task.batchId ?? ''} ${task.category ?? ''} ${task.runWindow ?? ''}`);
+        // 每行一个主动作：暂停/恢复时用 Resume、退避或死信用 Retry、阻塞不提供按钮，其余保持默认。
+        let primary = '';
+        if (disp.kind === 'running') {
+            primary = `<button type="button" class="btn btn-warning" onclick="pauseTask(${task.id})">⏸ ${t(locale, 'action.pause')}</button>`;
+        } else if (disp.kind === 'paused') {
+            primary = `<button type="button" class="btn btn-primary" onclick="retryTask(${task.id})">▶ ${t(locale, 'action.resume')}</button>`;
+        } else if (disp.kind === 'retrying' || disp.kind === 'stopped') {
+            primary = `<button type="button" class="btn btn-warning" onclick="retryTask(${task.id})">${t(locale, 'action.retry')}</button>`;
+        }
+        const statusTitle = status === 'dead_letter' ? `title="${esc(t(locale, 'status.deadLetterHint'))}"` : '';
+        const subtitleParts = [];
+        if (disp.subtitle) subtitleParts.push(`<div class="muted small" style="margin-top:5px">${esc(disp.subtitle)}</div>`);
+        if (status === 'dead_letter' && disp.kind !== 'blocked') subtitleParts.push(`<div class="muted small" style="margin-top:5px">${t(locale, 'status.deadLetterAction')}</div>`);
+        if (executionActive && status !== 'running') subtitleParts.push(`<div class="muted small" style="margin-top:5px">${t(locale, 'status.executionStillActive')}</div>`);
         return `<tr data-task-row data-search="${searchable}">
           <td class="faint" data-label="${t(locale, 'table.id')}">#${task.id}</td>
           <td data-primary data-label="${t(locale, 'table.task')}"><div class="task-name">${esc(task.name)}</div><div class="task-prompt" title="${esc(task.prompt)}">${esc(task.prompt.substring(0, 160))}</div>
             <div class="actions task-context"><span class="tag" title="${esc(task.cwd ?? '')}">${esc(task.cwd ? (basename(task.cwd) || task.cwd) : t(locale, 'projects.legacy'))}</span>${batchId ? `<span class="tag" title="${esc(t(locale, 'template.batchId'))}">${esc(batchId)}</span>` : ''}${task.runWindow ? `<span class="tag" title="${esc(t(locale, 'task.runWindowHint'))}">${esc(t(locale, 'task.runWindow'))}</span>` : ''}</div></td>
           <td data-label="${t(locale, 'table.agent')}"><span class="tag">${esc(task.agent)}</span></td>
-          <td data-label="${t(locale, 'table.status')}"><span class="badge b-${status}" ${status === 'dead_letter' ? `title="${esc(t(locale, 'status.deadLetterHint'))}"` : ''}>${statusText(locale, status)}</span>${status === 'dead_letter' ? `<div class="muted small" style="margin-top:5px">${t(locale, 'status.deadLetterAction')}</div>` : ''}${executionActive && status !== 'running' ? `<div class="muted small" style="margin-top:5px">${t(locale, 'status.executionStillActive')}</div>` : ''}</td>
+          <td data-label="${t(locale, 'table.status')}"><span class="badge ${disp.badgeClass}" ${statusTitle}>${esc(disp.label)}</span>${subtitleParts.join('')}</td>
           <td data-label="${t(locale, 'table.duration')}" class="small ${executionActive || task.status === 'running' ? '' : 'muted'}">${formatDuration(task.startedAt, task.finishedAt)}</td>
           <td data-label="${t(locale, 'table.retries')}" class="muted small">${(task.retryCount ?? 0) > 0 ? task.retryCount : '—'}</td>
           <td data-label="${t(locale, 'table.actions')}"><div class="actions">
+            ${primary}
             ${task.cwd?.trim() && ['pending', 'failed', 'dead_letter'].includes(task.status ?? '') ? `<button type="button" class="btn" onclick="openTaskEditor(${task.id})">${t(locale, 'action.edit')}</button>` : ''}
             <button type="button" class="btn" onclick="showDetail(${task.id})">${t(locale, 'action.details')}</button>
-            ${isValidSessionId(latestRun?.sessionId) ? `<button type="button" class="btn" onclick="copySessionCommand(${latestRun.id})">${icon('copy')}${t(locale, 'action.continueSession')}</button>` : ''}
-            ${task.status === 'failed' || task.status === 'dead_letter' ? `<button type="button" class="btn btn-warning" onclick="retryTask(${task.id})">${t(locale, 'action.retry')}</button>` : ''}
             ${task.runWindow && ['pending', 'failed'].includes(task.status ?? '') ? `<button type="button" class="btn" onclick="runNowTask(${task.id})">${t(locale, 'action.runNow')}</button>` : ''}
-            ${['pending', 'running', 'failed'].includes(task.status ?? '') ? `<button type="button" class="btn btn-warning" onclick="cancelTask(${task.id})">${t(locale, 'action.cancel')}</button>` : ''}
             ${task.status === 'running' || executionActive ? '' : `<button type="button" class="btn btn-danger" onclick="deleteTask(${task.id})">${t(locale, 'action.delete')}</button>`}
           </div></td>
         </tr>`;
-    }).join('');
+    });
+    const rows = buildRows(tasks).join('');
+    const doneRows = parsedStatus ? [] : buildRows(doneTasks);
+    const rowTableBody = (bodyRows: string | string[]) => `<div class="table-wrap"><table class="responsive-table">
+            <thead><tr><th>ID</th><th>${t(locale, 'table.task')}</th><th>${t(locale, 'table.agent')}</th><th>${t(locale, 'table.status')}</th><th>${t(locale, 'table.duration')}</th><th>${t(locale, 'table.retries')}</th><th>${t(locale, 'table.actions')}</th></tr></thead>
+            <tbody>${typeof bodyRows === 'string' ? bodyRows : bodyRows.join('')}</tbody>
+          </table></div>`;
 
     const table = tasks.length === 0
         ? emptyState(t(locale, 'empty.tasks'), t(locale, 'empty.tasksHint'))
-        : `<div class="table-wrap"><table class="responsive-table">
-            <thead><tr><th>ID</th><th>${t(locale, 'table.task')}</th><th>${t(locale, 'table.agent')}</th><th>${t(locale, 'table.status')}</th><th>${t(locale, 'table.duration')}</th><th>${t(locale, 'table.retries')}</th><th>${t(locale, 'table.actions')}</th></tr></thead>
-            <tbody>${rows}</tbody>
-          </table></div>
+        : `${rowTableBody(rows)}
           <div id="search-empty" hidden>${emptyState(t(locale, 'filter.noResults'), '')}</div>`;
+    const completedSection = !parsedStatus && counts.done > 0
+        ? `<details class="panel-completed">
+            <summary>${t(locale, 'completed.section', { count: counts.done })}</summary>
+            ${(doneTasks.length ? rowTableBody(doneRows) : `<p class="muted small">${t(locale, 'details.noHistory')}</p>`)}
+          </details>`
+        : '';
     const paginationParts = [];
     if (statusFilter) paginationParts.push(`status=${encodeURIComponent(statusFilter)}`);
     if (projectFilter) paginationParts.push(`cwd=${encodeURIComponent(projectFilter)}`);
@@ -837,6 +862,7 @@ app.get('/', async (c) => {
         <label class="search-box">${icon('search')}<input type="search" oninput="filterTasks(this.value)" placeholder="${t(locale, 'filter.searchTasks')}" aria-label="${t(locale, 'filter.searchTasks')}"></label>
       </div>
       <section class="panel reveal reveal-delay-2">${table}</section>
+      ${completedSection}
       ${pagination(locale, '/', page, totalPages, filteredTotal, suffix)}
       <script type="application/json" id="task-project-data">${projectData}</script>
       <dialog id="task-dialog" class="template-dialog">

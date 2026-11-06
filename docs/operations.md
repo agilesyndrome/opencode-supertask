@@ -206,7 +206,9 @@ Dashboard 的“定时任务”页可以直接创建和编辑 `cron`、固定间
 
 新建任务或定时任务时，先用 Dashboard 的文件夹选择器确定项目。Gateway 会在该目录读取本机 OpenCode 能力目录（1.x：`agent list` / `models --verbose`；2.x：`api agent.list` / `api model.list`）：Agent 下拉框只保留 primary/all 模式，避免把仅供委派的 subagent 直接传给 `opencode run`；模型先选 Provider 再选具体值，随后只显示该模型元数据声明的 variants。选“跟随 Agent / OpenCode 默认模型”时 Worker 不传 `-m`；variant 选默认值时不传 variant。OpenCode 2.x 只能以 `-m provider/model#variant` 指定 variant，因此 2.x 下使用 variant 必须同时选择模型，否则 run 直接失败并进入 `dead_letter`。CLI 和插件仍允许 Provider 自定义 variant 字符串，最终由实际执行的 OpenCode 判定。读取失败会在表单中显示原因，不使用伪造的静态列表。
 
-任务页和执行记录页的“继续会话”会从服务端按 run ID 读取已捕获的 Session ID，校验格式后复制 `cd <执行目录> && <该 run 实际使用的 opencode> --session <sessionId>`（旧 run 没有命令元数据时回退到任务 `cwd` 和当前 `SUPERTASK_OPENCODE_BIN`），保证用执行时的 OpenCode 版本在原项目中继续；完整 Session ID 不写入页面 HTML。浏览器拒绝异步写剪贴板时会弹出已选中命令的手动复制框。界面中的“等待重试”对应内部 `failed`，仍会按退避策略自动执行；“已停止”对应内部 `dead_letter`，可能是重试用尽或依赖无法继续，系统不会再自动运行，需要查看失败原因后手动重试。
+任务页和执行记录页的“继续会话”会从服务端按 run ID 读取已捕获的 Session ID，校验格式后复制 `cd <执行目录> && <该 run 实际使用的 opencode> --session <sessionId>`（旧 run 没有命令元数据时回退到任务 `cwd` 和当前 `SUPERTASK_OPENCODE_BIN`），保证用执行时的 OpenCode 版本在原项目中继续；完整 Session ID 不写入页面 HTML。浏览器拒绝异步写剪贴板时会弹出已选中命令的手动复制框。任务队列页的行内不再提供“继续会话”，该入口在任务详情的动作栏中。
+
+队列页按原因标注状态而非照抄 DB 状态：依赖级联进入 `dead_letter` 的任务显示"受阻塞 · 依赖 #N 不可恢复"且不提供 Retry（重试该任务必然被依赖校验拒绝，按钮只会误导）；真实死信显示"已停止"并提供 Retry；配额暂停、手动暂停和退避重试中的 `failed` 分别显示"已暂停 · 配额"、"已暂停 · 手动"和"重试等待中"。每行只保留一个主动作；取消任务统一从详情 danger zone 操作。界面中的“等待重试”对应内部 `failed`，仍会按退避策略自动执行；“已停止”对应内部 `dead_letter`，可能是重试用尽或依赖无法继续，系统不会再自动运行，需要查看失败原因后手动重试。未筛选视图把已完成任务收进底部"已完成（N）"折叠区，Done 筛选芯片仍展示完整列表。
 
 定时任务的 `maxInstances` 只限制自动调度，统计它产生的 `pending`、`running` 和仍有自动重试预算的 `failed`。Dashboard 的“立即运行一次”始终按当前模板创建普通 `pending` 任务；若 Worker 全局并发已满，它会留在队列等待。手动创建的任务仍计入后续自动调度的活跃实例数。不会回放离线期间错过的每个周期。
 
