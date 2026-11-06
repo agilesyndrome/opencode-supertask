@@ -189,6 +189,15 @@ function parseTaskPayload(value: unknown): NewTask {
         return milliseconds;
     };
 
+    const positiveIntegerOrEmpty = (name: string): number | null => {
+        const field = input[name];
+        if (field === undefined || field === null || field === '') return null;
+        if (typeof field !== 'number' || !Number.isSafeInteger(field) || field <= 0) {
+            throw new Error(`${name} 必须是正整数`);
+        }
+        return field;
+    };
+
     return {
         name: requiredString('name'),
         cwd: requiredString('cwd'),
@@ -198,6 +207,7 @@ function parseTaskPayload(value: unknown): NewTask {
         prompt: requiredString('prompt'),
         category: optionalString('category', 'general'),
         batchId: optionalString('batchId'),
+        dependsOn: positiveIntegerOrEmpty('dependsOn'),
         importance: integer('importance', 3),
         urgency: integer('urgency', 3),
         maxRetries: integer('maxRetries', 3),
@@ -886,6 +896,7 @@ app.get('/', async (c) => {
               <div class="template-form-grid">
                 <label class="form-field"><span>${t(locale, 'template.category')}</span><input id="task-category" autocomplete="off" value="general"></label>
                 <label class="form-field"><span>${t(locale, 'template.batchId')}</span><input id="task-batch" autocomplete="off"><small>${t(locale, 'task.batchHint')}</small></label>
+                <label class="form-field"><span>${t(locale, 'task.dependsOn')}</span><input id="task-depends" type="number" min="1" step="1" autocomplete="off"><small>${t(locale, 'task.dependsOnHint')}</small></label>
                 <label class="form-field"><span>${t(locale, 'template.importance')}</span><input id="task-importance" type="number" min="1" max="5" step="1" value="3" required></label>
                 <label class="form-field"><span>${t(locale, 'template.urgency')}</span><input id="task-urgency" type="number" min="1" max="5" step="1" value="3" required></label>
                 <label class="form-field"><span>${t(locale, 'template.maxRetries')}</span><input id="task-max-retries" type="number" min="0" max="1000" step="1" value="3" required></label>
