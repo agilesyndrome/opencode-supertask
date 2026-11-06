@@ -5,7 +5,7 @@ import { db, getSqlite, schema } from '@core/db';
 import { eq, and, desc, asc, sql, isNull, or, type SQL } from 'drizzle-orm';
 import type { Task, NewTask, TaskStatus } from '@core/db/schema';
 import { computeBackoff } from '@core/backoff';
-import { quotaRetryAfterMs } from '@core/quota';
+import { quotaRetryAfterMs, QUOTA_LOG_MARKER } from '@core/quota';
 import { validateRunWindow } from '@core/offpeak';
 import { validateTaskWorkingDirectory } from '@core/task-working-directory';
 import {
@@ -16,6 +16,11 @@ import { normalizeModelVariant } from '@core/model-variant';
 
 const { tasks, taskRuns } = schema;
 let cleanupInvocation = 0;
+
+/** 手动暂停的结果日志标记（横幅/统计用 SQL LIKE 识别）。 */
+export const MANUAL_PAUSE_MARKER = '任务已手动暂停';
+/** 手动暂停的 retryAfter 哨兵（2100-01-01Z）：仅手动 retry（Play）恢复。 */
+export const PAUSED_RETRY_AFTER_SENTINEL = 4102444800000;
 
 export interface TaskProjectSummary {
     cwd: string;
@@ -705,6 +710,53 @@ export class TaskService {
         return recovery;
     }
 
+    /**
+     * 手动暂停运行中的任务：原子地关闭活动 run 并把任务停在带哨兵 retryAfter
+     * 的 failed 状态（不增加 retryCount、不级联依赖）。Worker 轮询发现任务已
+     * 不再是 running 后终止受管进程组；手动 retry（Play）清空哨兵恢复领取。
+     */
+    static async pauseRun(taskId: number, log: string): Promise<Task | null> {
+        return db.transaction((tx) => {
+            const currentTask = tx
+                .select({ id: tasks.id })
+                .from(tasks)
+                .where(and(eq(tasks.id, taskId), eq(tasks.status, 'running')))
+                .get();
+            if (!currentTask) return null;
+
+            const activeRun = tx
+                .select({ id: taskRuns.id })
+                .from(taskRuns)
+                .where(and(
+                    eq(taskRuns.taskId, taskId),
+                    eq(taskRuns.status, 'running'),
+                ))
+                .get();
+            const finishedAt = new Date();
+            if (activeRun) {
+                tx.update(taskRuns)
+                    .set({ status: 'failed', finishedAt, log })
+                    .where(and(
+                        eq(taskRuns.id, activeRun.id),
+                        eq(taskRuns.status, 'running'),
+                    ))
+                    .run();
+            }
+            const paused = tx
+                .update(tasks)
+                .set({
+                    status: 'failed',
+                    finishedAt,
+                    resultLog: log,
+                    retryAfter: PAUSED_RETRY_AFTER_SENTINEL,
+                })
+                .where(and(eq(tasks.id, taskId), eq(tasks.status, 'running')))
+                .returning()
+                .get();
+            return paused ?? null;
+        }, { behavior: 'immediate' });
+    }
+
     static async interruptRun(
         taskId: number,
         runId: number,
@@ -1141,7 +1193,59 @@ export class TaskService {
             .get();
         stats.gatedPending = Number(gated?.count ?? 0);
 
+        // 暂停中的任务：failed + 未来 retryAfter + 日志标记（配额 / 手动）。
+        const nowMs = Date.now();
+        const pausedBase = [
+            eq(tasks.status, 'failed'),
+            sql`${tasks.retryAfter} > ${nowMs}`,
+            ...conditions,
+        ];
+        const quotaPaused = await db
+            .select({
+                count: sql<number>`count(*)`,
+                until: sql<number | null>`min(${tasks.retryAfter})`,
+            })
+            .from(tasks)
+            .where(and(
+                ...pausedBase,
+                sql`${tasks.resultLog} LIKE ${`%${QUOTA_LOG_MARKER}%`}`,
+            ))
+            .get();
+        stats.quotaPaused = Number(quotaPaused?.count ?? 0);
+        stats.quotaPausedUntil = quotaPaused?.until != null
+            && Number(quotaPaused.until) < PAUSED_RETRY_AFTER_SENTINEL
+            ? Number(quotaPaused.until)
+            : 0;
+        const manualPaused = await db
+            .select({ count: sql<number>`count(*)` })
+            .from(tasks)
+            .where(and(
+                ...pausedBase,
+                sql`${tasks.resultLog} LIKE ${`%${MANUAL_PAUSE_MARKER}%`}`,
+            ))
+            .get();
+        stats.manualPaused = Number(manualPaused?.count ?? 0);
+
         return stats;
+    }
+
+    /** 横幅数据：配额或手动暂停中的任务（含名称，供 Play 按钮定位）。 */
+    static async listPaused(limit = 10): Promise<Task[]> {
+        this.validateInteger('limit', limit, 1, 100);
+        const nowMs = Date.now();
+        return db
+            .select()
+            .from(tasks)
+            .where(and(
+                eq(tasks.status, 'failed'),
+                sql`${tasks.retryAfter} > ${nowMs}`,
+                or(
+                    sql`${tasks.resultLog} LIKE ${`%${QUOTA_LOG_MARKER}%`}`,
+                    sql`${tasks.resultLog} LIKE ${`%${MANUAL_PAUSE_MARKER}%`}`,
+                ),
+            ))
+            .orderBy(asc(tasks.retryAfter), asc(tasks.id))
+            .limit(limit);
     }
 
     static async projectSummaries(limit = 100): Promise<TaskProjectSummary[]> {

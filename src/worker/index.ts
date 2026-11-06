@@ -642,6 +642,11 @@ export class WorkerEngine {
             try {
                 const task = await TaskService.getById(entry.task.id);
                 if (task?.status === 'cancelled') await this.cancelEntry(entry);
+                // 任务被外部结算为 failed（手动暂停）时同样要终止受管进程组；
+                // cancel 式结算对已关闭的 run 是 no-op，不会改写暂停状态。
+                else if (task?.status === 'failed') {
+                    await this.terminateEntry(entry, { kind: 'cancel', message: '任务已手动暂停' });
+                }
             } catch (err) {
                 this.logError('cancel reconciliation failed', err, entry.task.id);
             }

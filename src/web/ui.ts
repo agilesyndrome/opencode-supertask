@@ -295,6 +295,13 @@ const ZH = {
     'feedback.retryFailed': '重试失败',
     'feedback.cancelFailed': '取消失败',
     'feedback.runNowFailed': '立即运行失败',
+    'banner.title': '队列状态',
+    'banner.pausedManual': '已手动暂停',
+    'banner.until': '恢复时间 {time}',
+    'banner.running': '运行中',
+    'action.pause': '暂停',
+    'action.resume': '继续',
+    'feedback.pauseFailed': '暂停失败',
     'feedback.deleteFailed': '删除失败',
     'feedback.requestFailed': '请求失败',
     'feedback.triggered': '已创建任务 #{id}',
@@ -611,6 +618,13 @@ const EN: Record<MessageKey, string> = {
     'feedback.retryFailed': 'Retry failed',
     'feedback.cancelFailed': 'Cancellation failed',
     'feedback.runNowFailed': 'Run now failed',
+    'banner.title': 'Queue status',
+    'banner.pausedManual': 'paused manually',
+    'banner.until': 'resumes {time}',
+    'banner.running': 'running',
+    'action.pause': 'Pause',
+    'action.resume': 'Resume',
+    'feedback.pauseFailed': 'Pause failed',
     'feedback.deleteFailed': 'Delete failed',
     'feedback.requestFailed': 'Request failed',
     'feedback.triggered': 'Task #{id} created',
@@ -755,6 +769,10 @@ const STYLES = `
     color:#fff; background:var(--primary); transition:top .2s ease; }
   .skip-link:focus { top:16px; }
   .app-shell { width:min(1440px,100%); margin:0 auto; padding:0 28px 28px; }
+  .queue-banner { display:flex; flex-wrap:wrap; gap:14px 24px; align-items:center; padding:12px 16px; margin-bottom:18px;
+    border:1px solid var(--border); border-radius:12px; background:color-mix(in srgb,var(--surface-2) 64%,var(--surface)); }
+  .queue-banner .banner-item { display:flex; align-items:center; gap:10px; }
+  .queue-banner .banner-icon { font-size:15px; line-height:1; }
   .topbar { min-height:80px; display:flex; align-items:center; justify-content:space-between; gap:20px;
     border-bottom:1px solid var(--border); }
   .brand { display:flex; align-items:center; gap:12px; min-width:0; }
@@ -1120,6 +1138,7 @@ function clientMessages(locale: Locale) {
         'dialog.restartGatewayBody', 'dialog.restartGatewayRunningBody', 'feedback.retryFailed',
         'feedback.cancelFailed', 'feedback.deleteFailed', 'feedback.requestFailed', 'feedback.triggered',
         'feedback.runNowFailed', 'action.runNow', 'stats.doneSinceMorning', 'task.runWindow', 'task.runWindowHint',
+        'banner.title', 'banner.pausedManual', 'banner.until', 'banner.running', 'action.pause', 'action.resume', 'feedback.pauseFailed',
         'feedback.taskCreated', 'feedback.taskUpdated', 'task.projectExisting', 'task.projectNew',
         'task.createTitle', 'task.editTitle', 'action.saveTask', 'action.updateTask',
         'feedback.configSaved', 'feedback.databaseCleared', 'feedback.templateCreated',
@@ -1245,6 +1264,7 @@ export function renderLayout(options: {
     async function retryTask(id){if(!await ask(text('dialog.retryTask',{id}),text('dialog.retryTaskBody')))return;try{await readJson(await fetch('/api/tasks/'+id+'/retry',{method:'POST'}));location.reload()}catch(error){showToast(text('feedback.retryFailed')+': '+error.message,'error')}}
     async function cancelTask(id){if(!await ask(text('dialog.cancelTask',{id}),text('dialog.cancelTaskBody'),true))return;try{await readJson(await fetch('/api/tasks/'+id+'/cancel',{method:'POST'}));location.reload()}catch(error){showToast(text('feedback.cancelFailed')+': '+error.message,'error')}}
     async function runNowTask(id){try{await readJson(await fetch('/api/tasks/'+id+'/run-now',{method:'POST'}));location.reload()}catch(error){showToast(text('feedback.runNowFailed')+': '+error.message,'error')}}
+    async function pauseTask(id){try{await readJson(await fetch('/api/tasks/'+id+'/pause',{method:'POST'}));location.reload()}catch(error){showToast(text('feedback.pauseFailed')+': '+error.message,'error')}}
     async function deleteTask(id){if(!await ask(text('dialog.deleteTask',{id}),text('dialog.deleteTaskBody'),true))return;try{await readJson(await fetch('/api/tasks/'+id,{method:'DELETE'}));location.reload()}catch(error){showToast(text('feedback.deleteFailed')+': '+error.message,'error')}}
     function detailDate(value){if(value===null||value===undefined||value==='')return text('details.none');const epoch=typeof value==='number'&&value<100000000000?value*1000:value;const date=new Date(epoch);return Number.isNaN(date.getTime())?String(value):date.toLocaleString(document.documentElement.lang)}
     function detailDuration(value){if(value===null||value===undefined)return text('details.default');const milliseconds=Number(value);if(!Number.isFinite(milliseconds))return String(value);if(milliseconds===0)return '0 ms';const units=[[86400000,text('duration.days')],[3600000,text('duration.hours')],[60000,text('duration.minutes')],[1000,text('duration.seconds')]];for(const [size,label] of units){if(milliseconds>=size&&milliseconds%size===0)return String(milliseconds/size)+' '+label}return String(milliseconds)+' ms'}

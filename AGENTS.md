@@ -80,7 +80,7 @@ bun run dev -- db check  # 检查数据库完整性与业务统计
 - 任务状态：`pending | running | done | failed | dead_letter | cancelled`；执行记录状态：`running | done | failed`。
 - `cwd` 是任务的项目分组、隔离键和 OpenCode 工作目录；插件必须使用 OpenCode 工具上下文的 `directory`，不得信任模型传入的 `cwd`，查询和状态变更必须保持同一作用域。任务/模板入库前必须验证非空 `cwd` 是已存在的绝对目录；Worker 取到非法遗留目录时必须记录失败并直接进入 `dead_letter`，不得启动 OpenCode 或自动重试刷错。Dashboard 分组保持 `cwd → batchId → tasks`，不得另建会与任务漂移的项目表。
 - 队列顺序保持 `urgency DESC → importance DESC → createdAt ASC → id ASC`；候选筛选与 `running` 转换必须在同一 `BEGIN IMMEDIATE` claim 中完成并返回实际抢占记录，不得恢复 `next()` 后另行 `start()` 的两阶段窗口。全局并发和同一 `batchId` 串行必须依据数据库运行态，在 Gateway 重启后仍成立；不同批次可并行，依赖任务仅在同 cwd 的 `dependsOn` 完成后运行。
-- `maxRetries` 表示首次执行之外允许的重试次数；失败任务按指数退避，耗尽后进入 `dead_letter`。Provider 配额撞限（`provider.quota: Usage limit reached`）不算失败：解析重置时刻后以 `retryAfter` 暂停，不增加 `retryCount`、不级联依赖，运行窗口任务仍受闲时闸门约束（见 `src/core/quota.ts`）。手动重试必须在同一写事务内确认依赖仍存在、同 `cwd` 且可恢复或已完成，才可重置重试预算，避免和历史清理并发制造悬空 `pending`。
+- `maxRetries` 表示首次执行之外允许的重试次数；失败任务按指数退避，耗尽后进入 `dead_letter`。Provider 配额撞限（`provider.quota: Usage limit reached`）不算失败：解析重置时刻后以 `retryAfter` 暂停，不增加 `retryCount`、不级联依赖，运行窗口任务仍受闲时闸门约束（见 `src/core/quota.ts`）。手动暂停（`TaskService.pauseRun`，Dashboard 横幅）以哨兵 `retryAfter` 停靠运行中任务并由 Worker 轮询终止进程组；Resume 复用手动 retry。手动重试必须在同一写事务内确认依赖仍存在、同 `cwd` 且可恢复或已完成，才可重置重试预算，避免和历史清理并发制造悬空 `pending`。
 - `variant`、`retryBackoffMs` 和 `timeoutMs` 可按任务覆盖；调度模板克隆时必须保留 `cwd/model/variant/batchId/maxRetries/retryBackoffMs/timeoutMs`，新 run 必须快照实际 model/variant。
 - 运行中任务进入 `cancelled` 后，Worker 必须在轮询周期内终止对应的受管进程组并关闭 run；只有确认该组排空后才能关闭、重试、释放批次或在 Gateway 停机时重置为 `pending`，否则必须保持隔离。不得声称 SuperTask 能终止已主动离组的 daemon。
 - 删除任务必须拒绝 `running` 状态、仍有 `running` 执行记录，或仍被 `pending/running/failed/dead_letter` 任务依赖的前置任务；手动删除与过期清理都必须防止子进程失联和依赖悬空。
