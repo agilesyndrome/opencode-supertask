@@ -45,6 +45,7 @@ import {
     formatFuture,
     formatRelative,
     icon,
+    openCodeUiLink,
     renderLayout,
     resolveDisplayStatus,
     runStatusText,
@@ -60,6 +61,26 @@ const LEGACY_PROJECT_FILTER = '__supertask_legacy__';
 const TASK_STATUSES = new Set<TaskStatus>([
     'pending', 'running', 'done', 'failed', 'dead_letter', 'cancelled',
 ]);
+
+// OpenCode Web UI 深链参数：显式配置优先；缺省回退到本机 opencode 服务发现（service.json）。
+const OPENCODE_SERVICE_JSON = join(homedir(), '.local/state/opencode/service.json');
+
+function resolveOpenCodeUi(config: GatewayConfig): { base: string; key: string } | null {
+    const configured = config.openCodeUi;
+    if (configured) {
+        return { base: configured.baseUrl, key: configured.serverKey ?? new URL(configured.baseUrl).origin };
+    }
+    try {
+        const service = JSON.parse(readFileSync(OPENCODE_SERVICE_JSON, 'utf-8')) as { url?: string };
+        if (typeof service.url === 'string' && /^https?:\/\//.test(service.url)) {
+            const base = service.url.replace(/\/+$/, '');
+            return { base, key: new URL(base).origin };
+        }
+    } catch {
+        // 本机没有 opencode service 时无链接可用。
+    }
+    return null;
+}
 
 // 每行/每卡一个主动作：运行→暂停、人工/配额暂停→恢复、退避或死信→重试；受阻塞不给（会被依赖校验拒绝）。
 function primaryActionHtml(locale: Locale, task: Task, disp: DisplayStatus): string {
@@ -705,6 +726,7 @@ function pagination(locale: Locale, basePath: string, page: number, pages: numbe
 
 app.get('/', async (c) => {
     const locale = resolveLocale(c);
+    const openCodeUi = resolveOpenCodeUi(loadConfig());
     const page = parsePositiveInteger(c.req.query('page') || '1');
     if (page === null) return c.text('invalid page', 400);
     const statusFilter = c.req.query('status') || '';
@@ -816,6 +838,7 @@ app.get('/', async (c) => {
             ${primary}
             ${task.cwd?.trim() && ['pending', 'failed', 'dead_letter'].includes(task.status ?? '') ? `<button type="button" class="btn" onclick="openTaskEditor(${task.id})">${t(locale, 'action.edit')}</button>` : ''}
             <button type="button" class="btn" onclick="showDetail(${task.id})">${t(locale, 'action.details')}</button>
+            ${latestRun?.sessionId && isValidSessionId(latestRun.sessionId) && openCodeUi ? `<a class="btn" href="${esc(openCodeUiLink(openCodeUi.base, openCodeUi.key, latestRun.sessionId))}" target="_blank" rel="noopener">${t(locale, 'action.openInOpenCode')}</a>` : ''}
             ${task.runWindow && ['pending', 'failed'].includes(task.status ?? '') ? `<button type="button" class="btn" onclick="runNowTask(${task.id})">${t(locale, 'action.runNow')}</button>` : ''}
             ${task.status === 'running' || executionActive ? '' : `<button type="button" class="btn btn-danger" onclick="deleteTask(${task.id})">${t(locale, 'action.delete')}</button>`}
           </div></td>
@@ -920,7 +943,12 @@ app.get('/', async (c) => {
         </form>
       </dialog>`;
 
-    return c.html(renderLayout({ locale, activeTab: 'tasks', body }));
+    return c.html(renderLayout({
+        locale,
+        activeTab: 'tasks',
+        body,
+        pageData: openCodeUi ? { uiBase: openCodeUi.base, serverKey: openCodeUi.key } : undefined,
+    }));
 });
 
 // 看板：泳道=批次（cwd+batchId），无批次的任务沿 dependsOn 并入链头，否则单卡；列复用展示层状态词汇。
@@ -937,6 +965,8 @@ app.get('/board', async (c) => {
         TaskService.list({ status: 'running', limit: 10 }),
     ]);
     const config = loadConfig();
+    const openCodeUi = resolveOpenCodeUi(config);
+    const latestRuns = await TaskRunService.getLatestByTaskIds(tasks.map((task) => task.id));
     const maxConcurrency = config.worker.maxConcurrency;
     const runningCount = statsData.running || 0;
     const now = Date.now();
@@ -955,6 +985,7 @@ app.get('/board', async (c) => {
             ${primaryActionHtml(locale, task, disp)}
             ${task.runWindow && ['pending', 'failed'].includes(task.status ?? '') ? `<button type="button" class="btn" onclick="runNowTask(${task.id})">${t(locale, 'action.runNow')}</button>` : ''}
             <button type="button" class="btn" onclick="showDetail(${task.id})">${t(locale, 'action.details')}</button>
+            ${latestRuns.get(task.id)?.sessionId && isValidSessionId(latestRuns.get(task.id)!.sessionId!) && openCodeUi ? `<a class="btn" href="${esc(openCodeUiLink(openCodeUi.base, openCodeUi.key, latestRuns.get(task.id)!.sessionId!))}" target="_blank" rel="noopener">${t(locale, 'action.openInOpenCode')}</a>` : ''}
           </div>
         </article>`;
     };
@@ -992,7 +1023,12 @@ app.get('/board', async (c) => {
             ? `<section class="panel reveal reveal-delay-2">${emptyState(t(locale, 'board.empty'), '')}</section>`
             : `<div class="board reveal reveal-delay-2">${lanes.map(renderLane).join('')}</div>`}
     `;
-    return c.html(renderLayout({ locale, activeTab: 'board', body }));
+    return c.html(renderLayout({
+        locale,
+        activeTab: 'board',
+        body,
+        pageData: openCodeUi ? { uiBase: openCodeUi.base, serverKey: openCodeUi.key } : undefined,
+    }));
 });
 
 app.get('/templates', async (c) => {

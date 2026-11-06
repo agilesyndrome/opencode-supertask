@@ -29,6 +29,12 @@ export interface GatewayConfig {
         /** 允许出现在 Host 里的额外主机名（反代场景）；小写、不带端口。 */
         extraHosts: string[];
     };
+    /** OpenCode Web UI 深链（看板/队列“在 OpenCode 中打开”）；缺省时回退到本机 service.json 发现。 */
+    openCodeUi?: {
+        baseUrl: string;
+        /** 覆盖路由里的 server key 字符串；缺省用 baseUrl 的 origin。 */
+        serverKey?: string;
+    };
 }
 
 const DEFAULT_CONFIG: GatewayConfig = {
@@ -188,7 +194,23 @@ export function validateConfig(input: unknown): GatewayConfig {
             port: integerAt(dashboard, 'port', DEFAULT_CONFIG.dashboard.port, 1, 65_535, 'dashboard'),
             extraHosts: dashboardExtraHostsAt(dashboard, 'extraHosts'),
         },
+        openCodeUi: openCodeUiAt(objectAt(root.openCodeUi, 'openCodeUi'), 'openCodeUi'),
     };
+}
+
+/** openCodeUi：可选；未配置时运行时回退到本机 opencode 服务发现（service.json）。baseUrl 去尾斜杠。 */
+function openCodeUiAt(source: Record<string, unknown>, path: string): { baseUrl: string; serverKey?: string } | undefined {
+    if (Object.keys(source).length === 0) return undefined;
+    const rawBase = source.baseUrl;
+    if (typeof rawBase !== 'string' || !/^https?:\/\//.test(rawBase.trim())) {
+        throw new Error(`${path}.baseUrl 必须是 http(s):// URL`);
+    }
+    const baseUrl = rawBase.trim().replace(/\/+$/, '');
+    const rawKey = source.serverKey;
+    if (rawKey !== undefined && (typeof rawKey !== 'string' || !rawKey.trim())) {
+        throw new Error(`${path}.serverKey 必须是非空字符串`);
+    }
+    return { baseUrl, ...(rawKey === undefined ? {} : { serverKey: rawKey.trim() }) };
 }
 
 export function loadConfig(path = getConfigPath()): GatewayConfig {

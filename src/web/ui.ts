@@ -228,6 +228,7 @@ const ZH = {
     'task.dependsOnHint': '任务 #N ID；依赖同目录的已有任务，完成后再执行。',
     'task.forkOf': '#{id} 的复刻',
     'action.fork': '复刻为新任务',
+    'action.openInOpenCode': '在 OpenCode 中打开',
     'task.projectExisting': '此项目现有 {total} 个任务：运行 {running}，排队 {pending}，异常 {failed}。',
     'task.projectNew': '这是一个新项目分组；创建后会出现在项目列表中。',
     'catalog.chooseProject': '请先选择项目目录',
@@ -577,6 +578,7 @@ const EN: Record<MessageKey, string> = {
     'task.dependsOnHint': 'Task #N ID; the task starts only after its same-directory prerequisite finishes.',
     'task.forkOf': 'Fork of #{id}',
     'action.fork': 'Fork as new task',
+    'action.openInOpenCode': 'Open in OpenCode',
     'task.projectExisting': 'This project has {total} tasks: {running} running, {pending} queued, and {failed} with issues.',
     'task.projectNew': 'This is a new project group. It appears in the project list after creation.',
     'catalog.chooseProject': 'Choose a project directory first',
@@ -916,6 +918,12 @@ function compareKeys(
 export function statusText(locale: Locale, status: string): string {
     const key = `status.${status}` as MessageKey;
     return key in ZH ? t(locale, key) : t(locale, 'status.unknown');
+}
+
+/** OpenCode Web UI 会话深链：{base}/server/{base64url(serverKey)}/session/{id}（编码取自官方 Web UI 包）。 */
+export function openCodeUiLink(baseUrl: string, serverKey: string, sessionId: string): string {
+    const encoded = Buffer.from(serverKey).toString('base64url');
+    return `${baseUrl.replace(/\/+$/, '')}/server/${encoded}/session/${sessionId}`;
 }
 
 /** 级联阻塞标记记录的是历史；结合当前列表判断阻塞源是否仍在死信态（列表里找不到阻塞源时保守视为仍阻塞）。 */
@@ -1423,7 +1431,7 @@ function clientMessages(locale: Locale) {
         'runStatus.running', 'runStatus.done', 'runStatus.failed',
         'schedule.cron', 'schedule.recurring', 'schedule.delayed', 'schedule.unknown',
         'duration.seconds', 'duration.minutes', 'duration.hours', 'duration.days',
-        'action.continueSession', 'action.fork', 'task.forkOf',
+        'action.continueSession', 'action.fork', 'task.forkOf', 'action.openInOpenCode',
         'feedback.copyFailed',
         'dialog.cancelTask', 'dialog.cancelTaskBody', 'dialog.retryTask', 'dialog.retryTaskBody',
         'dialog.deleteTask', 'dialog.deleteTaskBody', 'dialog.disableTemplate', 'dialog.disableTemplateBody',
@@ -1449,6 +1457,7 @@ export function renderLayout(options: {
     locale: Locale;
     activeTab: ActiveTab;
     body: string;
+    pageData?: Record<string, unknown>;
 }): string {
     const { locale, activeTab, body } = options;
     const page = PAGE_KEYS[activeTab];
@@ -1460,6 +1469,9 @@ export function renderLayout(options: {
         { id: 'system' as const, href: '/system', icon: 'system' as const },
     ];
     const ui = JSON.stringify(clientMessages(locale)).replace(/</g, '\\u003c');
+    const pageData = options.pageData
+        ? `<script type="application/json" id="page-data">${JSON.stringify(options.pageData).replace(/</g, '\\u003c')}</script>`
+        : '';
     const language = locale === 'en' ? 'en' : 'zh-CN';
     return `<!DOCTYPE html>
 <html lang="${language}">
@@ -1475,6 +1487,7 @@ export function renderLayout(options: {
 </head>
 <body>
   <a class="skip-link" href="#main">${t(locale, 'a11y.skip')}</a>
+  ${pageData}
   <div class="app-shell">
     <header class="topbar">
       <div class="brand">
@@ -1591,7 +1604,8 @@ export function renderLayout(options: {
         [text('details.retryBackoff'),detailDuration(data.retryBackoffMs)],[text('details.timeout'),detailDuration(data.timeoutMs)],[text('details.lastRun'),detailDate(data.lastRunAt)],[text('details.nextRun'),detailDate(data.nextRunAt)],
         [text('details.createdAt'),detailDate(data.createdAt)],[text('details.updatedAt'),detailDate(data.updatedAt)]
     ]}
-    function detailTaskActions(data){const bar=document.createElement('div');bar.className='actions';bar.style.marginTop='12px';const run=(data._runs||[]).filter(item=>item.sessionId).pop();if(run){const b=document.createElement('button');b.type='button';b.className='btn';b.textContent=text('action.continueSession');b.onclick=()=>copySessionCommand(run.id);bar.appendChild(b)}if(data.status==='done'||data.status==='dead_letter'){const b=document.createElement('button');b.type='button';b.className='btn';b.textContent=text('action.fork');b.onclick=()=>forkTask(data.id);bar.appendChild(b)}if(['pending','running','failed'].includes(data.status)){const b=document.createElement('button');b.type='button';b.className='btn btn-danger';b.textContent=text('action.cancel');b.onclick=()=>{document.getElementById('detail-dialog').close();cancelTask(data.id)};bar.appendChild(b)}return bar.children.length?bar:null}
+    function openCodeUiLinkFor(sessionId){if(!sessionId||!/^ses_[A-Za-z0-9_]+$/.test(String(sessionId)))return null;let d=null;try{d=JSON.parse(document.getElementById('page-data').textContent)}catch(error){return null}if(!d||!d.uiBase||!d.serverKey)return null;const enc=s=>btoa(String.fromCharCode.apply(null,new TextEncoder().encode(s))).replace(/\\+/g,'-').replace(/\\//g,'_').replace(/=/g,'');return d.uiBase.replace(/\\/+$/,'')+'/server/'+enc(d.serverKey)+'/session/'+sessionId}
+    function detailTaskActions(data){const bar=document.createElement('div');bar.className='actions';bar.style.marginTop='12px';const run=(data._runs||[]).filter(item=>item.sessionId).pop();if(run){const b=document.createElement('button');b.type='button';b.className='btn';b.textContent=text('action.continueSession');b.onclick=()=>copySessionCommand(run.id);bar.appendChild(b)}const uiLink=openCodeUiLinkFor(run&&run.sessionId);if(uiLink){const a=document.createElement('a');a.className='btn';a.href=uiLink;a.target='_blank';a.rel='noopener';a.textContent=text('action.openInOpenCode');bar.appendChild(a)}if(data.status==='done'||data.status==='dead_letter'){const b=document.createElement('button');b.type='button';b.className='btn';b.textContent=text('action.fork');b.onclick=()=>forkTask(data.id);bar.appendChild(b)}if(['pending','running','failed'].includes(data.status)){const b=document.createElement('button');b.type='button';b.className='btn btn-danger';b.textContent=text('action.cancel');b.onclick=()=>{document.getElementById('detail-dialog').close();cancelTask(data.id)};bar.appendChild(b)}return bar.children.length?bar:null}
     async function forkTask(id){try{const data=await readJson(await fetch('/api/tasks/'+id));document.getElementById('detail-dialog').close();openTaskCreator();taskField('name').value=text('task.forkOf',{id:'#'+id});taskField('prompt').value=data.prompt||'';taskField('category').value=data.category||'general';taskField('cwd').value=data.cwd||'';setPreferredVariant('task',data.model||'default',data.variant||'');if(data.dependsOn)taskField('depends').value=String(data.dependsOn);taskField('max-retries').value=String(data.maxRetries??3);setDuration('task-retry-backoff',data.retryBackoffMs??30000);setDuration('task-timeout',data.timeoutMs);updateTaskProjectStatus();if(taskField('cwd').value)loadCatalog('task',data.agent||'',data.model||'default',true);setTimeout(()=>taskField('name').focus(),80)}catch(error){showToast(error.message,'error')}}
     async function showRecord(url,type){try{const data=await readJson(await fetch(url));const content=document.getElementById('detail-content');content.replaceChildren();const grid=document.createElement('div');grid.className='detail-grid';for(const [label,value,options] of detailFields(type,data))grid.appendChild(detailField(label,value,options));content.appendChild(grid);if(type==='task'){const bar=detailTaskActions(data);if(bar)content.appendChild(bar);content.appendChild(renderDetailHistory(data._runs));}document.getElementById('detail-title').textContent=text(type==='task'?'details.taskTitle':type==='run'?'details.runTitle':'details.templateTitle');document.getElementById('detail-raw').textContent=JSON.stringify(data,null,2);document.querySelector('#detail-dialog .detail-raw').open=false;document.getElementById('detail-dialog').showModal()}catch(error){showToast(error.message,'error')}}
     const showDetail=id=>showRecord('/api/tasks/'+id,'task');const showRunDetail=id=>showRecord('/api/runs/'+id,'run');const showTemplateDetail=id=>showRecord('/api/templates/'+id,'template');
