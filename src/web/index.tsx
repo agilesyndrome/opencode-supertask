@@ -40,6 +40,7 @@ import type { GatewayDiagnostic } from '../daemon/pm2';
 import { getDashboardGatewayDiagnostic } from './gateway-diagnostic';
 import {
     buildBoardLanes,
+    cascadeBlockerStillDead,
     formatDateTime,
     formatFuture,
     formatRelative,
@@ -789,9 +790,10 @@ app.get('/', async (c) => {
         return `<a href="${esc(href)}" class="filter-chip ${statusFilter === status ? 'active' : ''}">${label}</a>`;
     }).join('');
 
+    const tasksById = new Map(tasks.map((task) => [task.id, task]));
     const buildRows = (taskRows: typeof tasks) => taskRows.map((task) => {
         const status = safeStatus(task.status);
-        const disp = resolveDisplayStatus(locale, task, Date.now());
+        const disp = resolveDisplayStatus(locale, task, Date.now(), { blockerDead: cascadeBlockerStillDead(task, tasksById) });
         const latestRun = latestRuns.get(task.id);
         const executionActive = latestRun?.status === 'running';
         const batchId = task.batchId?.trim() || null;
@@ -940,8 +942,9 @@ app.get('/board', async (c) => {
     const now = Date.now();
     const lanes = buildBoardLanes(tasks, now);
 
+    const tasksById = new Map(tasks.map((task) => [task.id, task]));
     const renderCard = (task: Task) => {
-        const disp = resolveDisplayStatus(locale, task, now);
+        const disp = resolveDisplayStatus(locale, task, now, { blockerDead: cascadeBlockerStillDead(task, tasksById) });
         const batchId = task.batchId?.trim() || '';
         return `<article class="board-card">
           <div class="board-card-title">#${task.id} ${esc(task.name)}</div>

@@ -41,6 +41,7 @@ const ZH = {
     'board.batchLane': '批次 {id}',
     'board.chainLane': '#{id} 起的依赖链',
     'board.empty': '没有待处理的任务。',
+    'status.blockerRecovered': '依赖 #{id} 已恢复，可重试',
     'action.refresh': '刷新',
     'action.details': '详情',
     'action.retry': '重试',
@@ -389,6 +390,7 @@ const EN: Record<MessageKey, string> = {
     'board.batchLane': 'Batch {id}',
     'board.chainLane': 'Chain from #{id}',
     'board.empty': 'No active tasks.',
+    'status.blockerRecovered': 'Dependency #{id} recovered — retryable',
     'action.refresh': 'Refresh',
     'action.details': 'Details',
     'action.retry': 'Retry',
@@ -723,16 +725,27 @@ export interface DisplayStatus {
 /**
  * 展示层状态推导：同一 DB 状态按原因细分（依赖级联=受阻塞、哨兵/配额=暂停、
  * 退避=重试等待中），供队列页与看板复用；不改写 DB 状态语义。
+ * 级联标记是历史事实：调用方可通过 options.blockerDead=false 声明阻塞源已恢复，
+ * 此时不再按"受阻塞"展示（Retry 也重新可用）；缺省保守视为仍阻塞。
  */
 export function resolveDisplayStatus(
     locale: Locale,
     task: Task,
     nowMs: number = Date.now(),
+    options: { blockerDead?: boolean } = {},
 ): DisplayStatus {
     const status = task.status ?? 'pending';
     if (status === 'dead_letter') {
         const blockedBy = new RegExp(`${DEPENDENCY_DEAD_LOG_PREFIX}(\\d+)`).exec(task.resultLog ?? '');
         if (blockedBy) {
+            if (options.blockerDead === false) {
+                return {
+                    kind: 'retrying',
+                    label: t(locale, 'status.dead_letter'),
+                    subtitle: t(locale, 'status.blockerRecovered', { id: blockedBy[1] }),
+                    badgeClass: 'b-failed',
+                };
+            }
             return {
                 kind: 'blocked',
                 label: t(locale, 'status.blocked'),
@@ -811,7 +824,7 @@ export function buildBoardLanes(tasks: Task[], nowMs: number = Date.now()): Boar
         if (task.status === 'done') {
             batchLane.done.push(task);
         } else {
-            const column = BOARD_COLUMN_BY_KIND[resolveDisplayStatus('en', task, nowMs).kind] ?? 'queued';
+            const column = BOARD_COLUMN_BY_KIND[resolveDisplayStatus('en', task, nowMs, { blockerDead: cascadeBlockerStillDead(task, byId) }).kind] ?? 'queued';
             batchLane[column].push(task);
         }
     }
@@ -841,7 +854,7 @@ export function buildBoardLanes(tasks: Task[], nowMs: number = Date.now()): Boar
             laneKey = `c\u001f${task.cwd}\u001f${task.id}`;
         }
         const target = lanes.get(laneKey) ?? lane(laneKey, task.dependsOn ? { type: 'chain', id: String(task.id) } : { type: 'task', id: String(task.id) });
-        const column = BOARD_COLUMN_BY_KIND[resolveDisplayStatus('en', task, nowMs).kind] ?? 'queued';
+        const column = BOARD_COLUMN_BY_KIND[resolveDisplayStatus('en', task, nowMs, { blockerDead: cascadeBlockerStillDead(task, byId) }).kind] ?? 'queued';
         target[column].push(task);
     }
     for (const result of lanes.values()) {
@@ -855,6 +868,14 @@ export function buildBoardLanes(tasks: Task[], nowMs: number = Date.now()): Boar
 export function statusText(locale: Locale, status: string): string {
     const key = `status.${status}` as MessageKey;
     return key in ZH ? t(locale, key) : t(locale, 'status.unknown');
+}
+
+/** 级联阻塞标记记录的是历史；结合当前列表判断阻塞源是否仍在死信态（列表里找不到阻塞源时保守视为仍阻塞）。 */
+export function cascadeBlockerStillDead(task: Task, byId: Map<number, Task>): boolean {
+    const match = new RegExp(`${DEPENDENCY_DEAD_LOG_PREFIX}(\\d+)`).exec(task.resultLog ?? '');
+    if (!match) return false;
+    const blocker = byId.get(Number(match[1]));
+    return blocker ? blocker.status === 'dead_letter' : true;
 }
 
 export function runStatusText(locale: Locale, status: string): string {
