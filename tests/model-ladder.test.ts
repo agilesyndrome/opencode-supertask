@@ -23,6 +23,13 @@ describe('模型阶梯', () => {
             expect(() => validateConfig({ configVersion: 2, modelLadder: { peak: ['  '] } })).toThrow(/空模型条目/);
             expect(() => validateConfig({ configVersion: 2, modelLadder: { peak: Array.from({ length: 9 }, (_, i) => `m${i}`) } })).toThrow(/最多 8 档/);
         });
+
+        test('条目必须是 provider/model 形式且不含特殊字符', () => {
+            expect(() => validateConfig({ configVersion: 2, modelLadder: { peak: ['openrouter'] } })).toThrow(/provider\/model/);
+            expect(() => validateConfig({ configVersion: 2, modelLadder: { peak: ['openrouter/z-ai/glm; touch x'] } })).toThrow(/provider\/model/);
+            expect(validateConfig({ configVersion: 2, modelLadder: { peak: ['z-ai/glm-4.6'] } }).modelLadder.peak).toEqual(['z-ai/glm-4.6']);
+            expect(validateConfig({ configVersion: 2, modelLadder: { peak: ['openrouter/~z-ai/glm-flash-latest'] } }).modelLadder.peak).toEqual(['openrouter/~z-ai/glm-flash-latest']);
+        });
     });
 
     describe('额度耗尽分类', () => {

@@ -223,6 +223,9 @@ function modelLadderAt(source: Record<string, unknown>, path: string): { peak: s
         for (const item of value) {
             if (typeof item !== 'string' || !item.trim()) throw new Error(`${path}.${key} 含空模型条目`);
             const model = item.trim();
+            if (!/^[A-Za-z0-9~.^_:/-]+$/.test(model) || !model.includes('/')) {
+                throw new Error(`${path}.${key} 条目需为 provider/model 形式且不含空格或特殊字符: ${model}`);
+            }
             if (!models.includes(model)) models.push(model);
         }
         return models;

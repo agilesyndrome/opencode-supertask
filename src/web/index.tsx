@@ -1234,6 +1234,25 @@ app.get('/runs', async (c) => {
 app.get('/system', async (c) => {
     const locale = resolveLocale(c);
     const config = loadConfig();
+    // 模型阶梯编辑器：provider/model 下拉数据来自 OpenCode 目录（不可用时仍可手输）。
+    let ladderCatalogModels: string[] = [];
+    try {
+        ladderCatalogModels = (await loadOpenCodeCatalog(process.cwd(), { timeoutMs: 8000 })).models;
+    } catch {
+        // 目录不可用：无 datalist 建议，不阻塞系统页。
+    }
+    const ladderSplit = (value: string): { provider: string; model: string } => {
+        const separator = value.indexOf('/');
+        return separator === -1 ? { provider: '', model: value } : { provider: value.slice(0, separator), model: value.slice(separator + 1) };
+    };
+    const ladderProviders = [...new Set(ladderCatalogModels
+        .map((model) => ladderSplit(model).provider)
+        .filter(Boolean))];
+    const ladderRungHtml = (value: string): string => {
+        const { provider, model } = ladderSplit(value);
+        const listAttr = provider && ladderProviders.includes(provider) ? ` list="dl-${esc(provider)}"` : '';
+        return `<div class="ladder-rung"><span class="ladder-index"></span><input class="ladder-provider" type="text" value="${esc(provider)}" list="ladder-providers" placeholder="provider" maxlength="64" oninput="syncLadderList(this)"><span class="ladder-divider">/</span><input class="ladder-model" type="text" value="${esc(model)}"${listAttr} placeholder="model" maxlength="160"><div class="ladder-controls"><button type="button" class="icon-button" onclick="moveLadderRung(this,-1)" aria-label="${t(locale, 'system.moveUp')}">↑</button><button type="button" class="icon-button" onclick="moveLadderRung(this,1)" aria-label="${t(locale, 'system.moveDown')}">↓</button><button type="button" class="icon-button" onclick="removeLadderRung(this)" aria-label="${t(locale, 'system.removeRung')}">✕</button></div></div>`;
+    };
     const activeConfig = runtimeConfig ?? config;
     const restartRequired = runtimeConfig !== null && !configsEqual(config, runtimeConfig);
     const managedRestart = await canRestartCurrentGateway();
@@ -1286,13 +1305,16 @@ app.get('/system', async (c) => {
             <div class="field"><label for="rd">${t(locale, 'system.retentionDays')}</label>${unitInput('rd', config.watchdog.retentionDays, CONFIG_BOUNDS.retentionDays, 1, t(locale, 'system.days'))}</div>
           </section>
           <section class="card settings-card reveal-delay-2"><h2 class="settings-title"><span>${icon('tasks')}${t(locale, 'system.modelLadder')}</span></h2>
-            <div class="field"><label for="lp">${t(locale, 'system.ladderPeak')}</label></div>
-            <div class="ladder" id="lp">${config.modelLadder.peak.map((model, index) => `<div class="ladder-rung"><span class="ladder-index">${index + 1}</span><input class="ladder-model" type="text" value="${esc(model)}" maxlength="160" placeholder="provider/model"><div class="ladder-controls"><button type="button" class="icon-button" onclick="moveLadderRung(this,-1)" aria-label="${t(locale, 'system.moveUp')}">↑</button><button type="button" class="icon-button" onclick="moveLadderRung(this,1)" aria-label="${t(locale, 'system.moveDown')}">↓</button><button type="button" class="icon-button" onclick="removeLadderRung(this)" aria-label="${t(locale, 'system.removeRung')}">✕</button></div></div>`).join('')}</div>
+            <datalist id="ladder-providers">${ladderProviders.map((provider) => `<option value="${esc(provider)}"></option>`).join('')}</datalist>
+            ${ladderProviders.map((provider) => `<datalist id="dl-${esc(provider)}">${ladderCatalogModels.filter((model) => model.startsWith(`${provider}/`)).map((model) => `<option value="${esc(ladderSplit(model).model)}"></option>`).join('')}</datalist>`).join('')}
+            <div class="field"><label>${t(locale, 'system.ladderPeak')}</label></div>
+            <div class="ladder" id="lp">${config.modelLadder.peak.map(ladderRungHtml).join('')}</div>
             <div class="actions ladder-add"><button type="button" class="btn" onclick="addLadderRung('lp')" ${config.modelLadder.peak.length >= 8 ? 'disabled' : ''}>${t(locale, 'system.addRung')}</button></div>
-            <div class="field" style="margin-top:14px"><label for="lo">${t(locale, 'system.ladderOffPeak')}</label></div>
-            <div class="ladder" id="lo">${config.modelLadder.offPeak.map((model, index) => `<div class="ladder-rung"><span class="ladder-index">${index + 1}</span><input class="ladder-model" type="text" value="${esc(model)}" maxlength="160" placeholder="provider/model"><div class="ladder-controls"><button type="button" class="icon-button" onclick="moveLadderRung(this,-1)" aria-label="${t(locale, 'system.moveUp')}">↑</button><button type="button" class="icon-button" onclick="moveLadderRung(this,1)" aria-label="${t(locale, 'system.moveDown')}">↓</button><button type="button" class="icon-button" onclick="removeLadderRung(this)" aria-label="${t(locale, 'system.removeRung')}">✕</button></div></div>`).join('')}</div>
+            <div class="field" style="margin-top:14px"><label>${t(locale, 'system.ladderOffPeak')}</label></div>
+            <div class="ladder" id="lo">${config.modelLadder.offPeak.map(ladderRungHtml).join('')}</div>
             <div class="actions ladder-add"><button type="button" class="btn" onclick="addLadderRung('lo')" ${config.modelLadder.offPeak.length >= 8 ? 'disabled' : ''}>${t(locale, 'system.addRung')}</button></div>
             <p class="muted small">${t(locale, 'system.ladderHint')}</p>
+            <p class="muted small">${t(locale, 'system.ladderHelp')}</p>
           </section>
         </div>
         <div class="save-row"><span class="muted small">${configStateText}</span><div class="actions"><button type="submit" class="btn">${t(locale, 'action.save')}</button>${managedRestart ? `<button type="button" class="btn btn-primary" onclick="saveConfig(true,${runningRuns.length})">${t(locale, 'action.saveAndRestart')}</button>` : ''}</div></div>
