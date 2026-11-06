@@ -740,7 +740,7 @@ export function resolveDisplayStatus(
                 badgeClass: 'b-dead_letter',
             };
         }
-        return { kind: 'stopped', label: t(locale, 'status.dead_letter'), subtitle: '', badgeClass: 'b-dead_letter' };
+        return { kind: 'stopped', label: t(locale, 'status.dead_letter'), subtitle: '', badgeClass: 'b-failed' };
     }
     if (status === 'failed') {
         const retryAfter = task.retryAfter ?? 0;

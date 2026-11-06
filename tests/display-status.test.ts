@@ -37,7 +37,9 @@ describe('resolveDisplayStatus', () => {
 
     test('dead_letter 无级联标记 → stopped（保留死信语义）', () => {
         const result = resolveDisplayStatus('zh-CN', makeTask({ status: 'dead_letter' }), NOW);
+        // 已停止=真实失败，红色徽章；受阻塞保持黄色（b-dead_letter）。
         expect(result.kind).toBe('stopped');
+        expect(result.badgeClass).toBe('b-failed');
     });
 
     test('failed + 哨兵 retryAfter → paused · manual', () => {
