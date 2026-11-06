@@ -167,6 +167,11 @@ const ZH = {
     'system.ladderPeak': '峰值时段梯队（由廉到贵，逗号分隔）',
     'system.ladderOffPeak': '闲时梯队（由廉到贵，逗号分隔）',
     'system.ladderHint': '仅作用于未指定模型的任务：额度/信用耗尽时自动切到下一档继续（不消耗重试预算），末档耗尽转为配额暂停。留空表示不启用。',
+    'system.addRung': '添加一档',
+    'system.moveUp': '上移',
+    'system.moveDown': '下移',
+    'system.removeRung': '移除',
+    'system.ladderMax': '最多 8 档',
     'system.milliseconds': '毫秒',
     'system.seconds': '秒',
     'system.minutes': '分钟',
@@ -521,6 +526,11 @@ const EN: Record<MessageKey, string> = {
     'system.ladderPeak': 'Peak-time ladder (cheapest first, comma-separated)',
     'system.ladderOffPeak': 'Off-peak ladder (cheapest first, comma-separated)',
     'system.ladderHint': 'Applies only to tasks without an explicit model: on credit/quota exhaustion the next rung takes over without burning retries; exhausting the last rung falls back to quota pause. Leave empty to disable.',
+    'system.addRung': 'Add rung',
+    'system.moveUp': 'Move up',
+    'system.moveDown': 'Move down',
+    'system.removeRung': 'Remove',
+    'system.ladderMax': 'Maximum 8 rungs',
     'system.milliseconds': 'ms',
     'system.seconds': 'seconds',
     'system.minutes': 'minutes',
@@ -1218,6 +1228,14 @@ const STYLES = `
   .settings-title span:first-child { display:flex; align-items:center; gap:8px; }
   .settings-title .icon { width:17px; height:17px; color:var(--primary); }
   .field { display:grid; grid-template-columns:minmax(0,1fr) 112px; align-items:center; gap:12px; margin:11px 0; }
+  .ladder { display:flex; flex-direction:column; gap:8px; }
+  .ladder-rung { display:flex; align-items:center; gap:8px; }
+  .ladder-rung .ladder-index { min-width:1.3em; text-align:right; font-weight:600; color:var(--text-2); font-size:13px; }
+  .ladder-rung .ladder-model { flex:1; min-width:0; height:36px; padding:0 10px; border:1px solid var(--border); border-radius:8px; outline:none; background:var(--surface); color:var(--text); }
+  .ladder-rung .ladder-model:focus { border-color:var(--primary); box-shadow:var(--focus); }
+  .ladder-rung .icon-button { width:30px; height:30px; }
+  .ladder-rung .ladder-controls { display:flex; gap:5px; }
+  .ladder-add { margin-top:10px; }
   .field label { color:var(--text-2); font-size:12px; }
   .input-unit { position:relative; }
   .input-unit input { width:100%; height:36px; padding:0 47px 0 10px; border:1px solid var(--border); border-radius:8px; outline:none;
@@ -1440,6 +1458,7 @@ function clientMessages(locale: Locale) {
         'schedule.cron', 'schedule.recurring', 'schedule.delayed', 'schedule.unknown',
         'duration.seconds', 'duration.minutes', 'duration.hours', 'duration.days',
         'action.continueSession', 'action.fork', 'task.forkOf', 'action.openInOpenCode',
+        'system.addRung', 'system.moveUp', 'system.moveDown', 'system.removeRung', 'system.ladderMax',
         'feedback.copyFailed',
         'dialog.cancelTask', 'dialog.cancelTaskBody', 'dialog.retryTask', 'dialog.retryTaskBody',
         'dialog.deleteTask', 'dialog.deleteTaskBody', 'dialog.disableTemplate', 'dialog.disableTemplateBody',
@@ -1668,13 +1687,17 @@ export function renderLayout(options: {
     async function deleteTmpl(id){if(!await ask(text('dialog.deleteTemplate'),text('dialog.deleteTemplateBody'),true))return;try{await readJson(await fetch('/api/templates/'+id,{method:'DELETE'}));location.reload()}catch(error){showToast(error.message,'error')}}
     async function triggerTmpl(id){if(!await ask(text('dialog.triggerTemplate'),text('dialog.triggerTemplateBody')))return;try{const data=await readJson(await fetch('/api/templates/'+id+'/trigger',{method:'POST'}));showToast(text('feedback.triggered',{id:data.taskId}));setTimeout(()=>location.reload(),550)}catch(error){showToast(error.message,'error')}}
     function toggleLog(id,button){const panel=document.getElementById('log-'+id);const hidden=!panel.hidden;panel.hidden=hidden;button.setAttribute('aria-expanded',String(!hidden));button.textContent=text(hidden?'action.logs':'action.hideLogs');if(!hidden)requestAnimationFrame(()=>panel.scrollIntoView({block:'nearest',behavior:'smooth'}));}
-    function parseLadder(value){return value.split(',').map(item=>item.trim()).filter(Boolean).slice(0,8)}
+    function renumberLadder(prefix){document.querySelectorAll('#'+prefix+' .ladder-rung').forEach((row,index)=>{const label=row.querySelector('.ladder-index');if(label)label.textContent=String(index+1)})}
+    function moveLadderRung(button,direction){const row=button.closest('.ladder-rung');if(!row)return;const container=row.closest('.ladder');if(!container)return;if(direction<0&&row.previousElementSibling)row.before(row.previousElementSibling);if(direction>0&&row.nextElementSibling)row.after(row.nextElementSibling);renumberLadder(container.id)}
+    function removeLadderRung(button){const row=button.closest('.ladder-rung');if(!row)return;const container=row.closest('.ladder');row.remove();if(container)renumberLadder(container.id)}
+    function addLadderRung(prefix){const container=document.getElementById(prefix);if(!container)return;if(container.querySelectorAll('.ladder-rung').length>=8){showToast(text('system.ladderMax'),'error');return}const row=document.createElement('div');row.className='ladder-rung';const index=document.createElement('span');index.className='ladder-index';const input=document.createElement('input');input.className='ladder-model';input.type='text';input.placeholder='provider/model';input.maxLength=160;const controls=document.createElement('div');controls.className='ladder-controls';const up=document.createElement('button');up.type='button';up.className='icon-button';up.textContent='↑';up.setAttribute('aria-label',text('system.moveUp'));up.onclick=()=>moveLadderRung(up,-1);const down=document.createElement('button');down.type='button';down.className='icon-button';down.textContent='↓';down.setAttribute('aria-label',text('system.moveDown'));down.onclick=()=>moveLadderRung(down,1);const remove=document.createElement('button');remove.type='button';remove.className='icon-button';remove.setAttribute('aria-label',text('system.removeRung'));remove.textContent='✕';remove.onclick=()=>removeLadderRung(remove);controls.append(up,down,remove);row.append(index,input,controls);container.appendChild(row);renumberLadder(prefix);input.focus()}
+    function collectLadder(prefix){return [...document.querySelectorAll('#'+prefix+' .ladder-model')].map(input=>input.value.trim()).filter(Boolean)}
     function filterTasks(value){const query=value.trim().toLocaleLowerCase();const completed=document.querySelector('.panel-completed');if(completed&&query)completed.open=true;let visible=0;document.querySelectorAll('[data-task-row]').forEach(row=>{const match=!query||row.dataset.search.toLocaleLowerCase().includes(query);row.hidden=!match;if(match)visible++});const empty=document.getElementById('search-empty');if(empty)empty.hidden=visible!==0;}
     function watchBoard(){const board=document.querySelector('.board');if(!board||typeof EventSource==='undefined')return;let refreshing=false;const rects=()=>{const map=new Map();board.querySelectorAll('.board-card[data-task-id]').forEach(card=>{const r=card.getBoundingClientRect();map.set(card.dataset.taskId,{x:r.x,y:r.y})});return map};const openStates=()=>{const map=new Map();board.querySelectorAll('details.lane-done').forEach(node=>{const lane=node.closest('.lane');const key=lane?(lane.querySelector('.lane-head')?.textContent||''):'';map.set(key,node.open)});return map};const refresh=async()=>{if(refreshing)return;refreshing=true;try{const before=rects();const beforeOpen=openStates();const response=await fetch(location.pathname+location.search,{headers:{'Accept':'text/html'}});if(!response.ok)return;const doc=new DOMParser().parseFromString(await response.text(),'text/html');const fresh=doc.querySelector('.board');if(!fresh)return;board.replaceWith(fresh);const newBoard=document.querySelector('.board');if(!newBoard)return;newBoard.querySelectorAll('details.lane-done').forEach(node=>{const lane=node.closest('.lane');const key=lane?(lane.querySelector('.lane-head')?.textContent||''):'';const wasOpen=beforeOpen.get(key);if(wasOpen!==undefined)node.open=wasOpen});newBoard.querySelectorAll('.board-card[data-task-id]').forEach(card=>{const wasRect=before.get(card.dataset.taskId);const nowRect=card.getBoundingClientRect();if(!wasRect){if(card.animate)card.animate([{opacity:0},{opacity:1}],{duration:220});return}const dx=wasRect.x-nowRect.x;const dy=wasRect.y-nowRect.y;if(Math.abs(dx)<1&&Math.abs(dy)<1)return;if(card.animate)card.animate([{transform:'translate('+dx+'px,'+dy+'px)'},{transform:'translate(0,0)'}],{duration:320,easing:'cubic-bezier(.22,.9,.26,1)'})})}catch(error){/* 网络抖动：等下一次 change */}finally{refreshing=false}};const source=new EventSource('/api/events');source.addEventListener('change',()=>{setTimeout(()=>{void refresh()},150)});}
     async function clearDatabase(){if(!await askDanger())return;try{const data=await readJson(await fetch('/api/database/clear',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({confirmation:'CLEAR'})}));showToast(text('feedback.databaseCleared',{path:data.backupPath}));setTimeout(()=>location.reload(),1000)}catch(error){showToast(error.message,'error')}}
     async function confirmGatewayRestart(runningCount=0){const body=runningCount>0?text('dialog.restartGatewayRunningBody',{count:runningCount}):text('dialog.restartGatewayBody');return await ask(text('dialog.restartGateway'),body)}
     async function restartGateway(){try{const data=await readJson(await fetch('/api/gateway/restart',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({confirmation:'RESTART'})}));showToast(text('feedback.restarting'));for(let attempt=0;attempt<120;attempt++){await new Promise(resolve=>setTimeout(resolve,500));try{const status=await readJson(await fetch('/api/gateway/status',{cache:'no-store'}));if(status.pid!==data.previousPid&&status.managed&&status.ready&&!status.restartRequired){location.reload();return true}}catch{}}showToast(text('feedback.restartTimeout'),'error');return false}catch(error){showToast(error.message,'error');return false}}
-    async function saveConfig(restartAfterSave=false,runningCount=0){if(restartAfterSave&&!await confirmGatewayRestart(runningCount))return;const form=document.getElementById('config-form');const ms=(input,factor)=>Math.round(Number(input.value)*factor);const data={worker:{maxConcurrency:Number(form.mc.value),pollIntervalMs:ms(form.pi,1),heartbeatIntervalMs:ms(form.hi,1000),taskTimeoutMs:ms(form.to,60000)},scheduler:{enabled:form.se.checked,checkIntervalMs:ms(form.si,1)},watchdog:{heartbeatTimeoutMs:ms(form.wt,1000),checkIntervalMs:ms(form.wci,1000),cleanupIntervalMs:ms(form.wcl,3600000),retentionDays:Number(form.rd.value)},modelLadder:{peak:parseLadder(form.lp.value),offPeak:parseLadder(form.lo.value)}};try{await readJson(await fetch('/api/config',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}));showToast(text('feedback.configSaved'));if(restartAfterSave){const restarted=await restartGateway();if(!restarted)setTimeout(()=>location.reload(),500)}else{setTimeout(()=>location.reload(),500)}}catch(error){showToast(error.message,'error')}}
+    async function saveConfig(restartAfterSave=false,runningCount=0){if(restartAfterSave&&!await confirmGatewayRestart(runningCount))return;const form=document.getElementById('config-form');const ms=(input,factor)=>Math.round(Number(input.value)*factor);const data={worker:{maxConcurrency:Number(form.mc.value),pollIntervalMs:ms(form.pi,1),heartbeatIntervalMs:ms(form.hi,1000),taskTimeoutMs:ms(form.to,60000)},scheduler:{enabled:form.se.checked,checkIntervalMs:ms(form.si,1)},watchdog:{heartbeatTimeoutMs:ms(form.wt,1000),checkIntervalMs:ms(form.wci,1000),cleanupIntervalMs:ms(form.wcl,3600000),retentionDays:Number(form.rd.value)},modelLadder:{peak:collectLadder('lp'),offPeak:collectLadder('lo')}};try{await readJson(await fetch('/api/config',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}));showToast(text('feedback.configSaved'));if(restartAfterSave){const restarted=await restartGateway();if(!restarted)setTimeout(()=>location.reload(),500)}else{setTimeout(()=>location.reload(),500)}}catch(error){showToast(error.message,'error')}}
     if(document.querySelector('.board'))watchBoard();
   </script>
 </body>
