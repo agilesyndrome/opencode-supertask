@@ -1,3 +1,4 @@
+import { isModelCreditsExhaustedError, isQuotaUsageLimitError, MODEL_LADDER_LOG_MARKER } from '@core/quota';
 import { TaskService } from '@core/services/task.service';
 import { TaskRunService } from '@core/services/task-run.service';
 import { isOffPeakNow } from '@core/offpeak';
@@ -102,6 +103,7 @@ export class WorkerEngine {
     private settlementRetryWakeups = new Set<() => void>();
     private cfg: GatewayConfig['worker'];
     private offPeak: GatewayConfig['scheduler']['offPeak'];
+    private modelLadder: GatewayConfig['modelLadder'];
     private opencodeBin: string;
     private maxOutputChars: number;
     private settlementRetryDelaysMs: number[];
@@ -110,6 +112,7 @@ export class WorkerEngine {
     constructor(cfg: GatewayConfig, options: WorkerEngineOptions = {}) {
         this.cfg = cfg.worker;
         this.offPeak = cfg.scheduler.offPeak;
+        this.modelLadder = cfg.modelLadder;
         this.opencodeBin = options.opencodeBin ?? openCodeExecutable();
         this.maxOutputChars = options.maxOutputChars ?? DEFAULT_MAX_OUTPUT_CHARS;
         this.settlementRetryDelaysMs = options.settlementRetryDelaysMs ?? [250, 1_000, 4_000];
@@ -620,7 +623,19 @@ export class WorkerEngine {
             return;
         }
 
-        const failed = await TaskService.failRun(entry.task.id, entry.runId, log);
+        const ladderShift = this.ladderShiftFor(entry.task, log);
+        const failed = await TaskService.failRun(entry.task.id, entry.runId, log, ladderShift ? { ladderShift } : {});
+        if (failed?.status === 'pending') {
+            console.log(JSON.stringify({
+                ts: new Date().toISOString(),
+                level: 'info',
+                msg: 'model ladder shifted',
+                taskId: entry.task.id,
+                nextModel: ladderShift?.nextModel,
+            }));
+            this.releaseBatch(entry.task);
+            return;
+        }
         if (!failed) {
             await TaskRunService.fail(
                 entry.runId,
@@ -783,6 +798,27 @@ export class WorkerEngine {
         entry.output.flush();
         const output = entry.output.text().trim();
         return `${entry.commandContext}${output ? `\n${output}` : ''}`;
+    }
+
+    /**
+     * 模型阶梯决策：仅对未显式选择模型（'default'）或已处于阶梯上的任务生效；
+     * 返回下一档模型，无阶梯/已到末档/用户显式模型不在梯子上时返回 undefined（维持既有配额暂停）。
+     */
+    private ladderShiftFor(task: Task, log: string): { nextModel: string; note: string } | undefined {
+        const quotaFamily = isQuotaUsageLimitError(log) || isModelCreditsExhaustedError(log);
+        if (!quotaFamily) return undefined;
+        const list = isOffPeakNow(new Date(), this.offPeak) ? this.modelLadder.offPeak : this.modelLadder.peak;
+        if (list.length === 0) return undefined;
+        const explicit = task.model && task.model !== 'default' ? task.model : null;
+        const index = explicit ? list.indexOf(explicit) : -1;
+        if (explicit && index === -1) return undefined;
+        const nextModel = list[index + 1];
+        if (!nextModel) return undefined;
+        const from = explicit ?? 'Agent 默认';
+        return {
+            nextModel,
+            note: `${MODEL_LADDER_LOG_MARKER}: ${from} → ${nextModel}（模型额度受限，已切换下一档继续；不消耗重试预算）`,
+        };
     }
 
     private resolveModel(taskModel: string | null): string | null {

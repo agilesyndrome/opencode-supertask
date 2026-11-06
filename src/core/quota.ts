@@ -25,6 +25,19 @@ export function isQuotaUsageLimitError(log: string | null | undefined): boolean 
 }
 
 /**
+ * 模型额度/信用耗尽（OpenRouter 免费预算用尽等）。与 provider usage limit 不同：
+ * 这类错误没有"重置时刻"，而是引导我们换下一个模型继续跑（模型阶梯）。
+ */
+const MODEL_CREDITS_RE = /insufficient credits?|credit balance(?: is)? too low|payment required|free-models-per-day/i;
+
+export function isModelCreditsExhaustedError(log: string | null | undefined): boolean {
+    return typeof log === 'string' && MODEL_CREDITS_RE.test(log);
+}
+
+/** 结果日志中的稳定标记：标识"模型阶梯已切换"的结果说明（不含配额语义）。 */
+export const MODEL_LADDER_LOG_MARKER = 'model.ladder';
+
+/**
  * 解析配额暂停的重试时刻（epoch ms）；非配额错误返回 null。
  *
  * 优先用 "will reset at" 时间戳；缺失、或相对延迟超出窗口长度 + 1h（疑似

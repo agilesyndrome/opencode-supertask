@@ -568,7 +568,7 @@ export class TaskService {
         taskId: number,
         runId: number,
         log?: string,
-        options?: { setDeadLetter?: boolean; retryAfterMs?: number },
+        options?: { setDeadLetter?: boolean; retryAfterMs?: number; ladderShift?: { nextModel: string; note: string } },
     ): Promise<Task | null> {
         const failed = db.transaction((tx) => {
             const currentTask = tx
@@ -586,6 +586,31 @@ export class TaskService {
                 ))
                 .get();
             if (!currentTask || !currentRun) return null;
+
+            // 模型阶梯：模型额度/信用耗尽且有下一档时，切到下一档继续（不消耗重试预算），优先于配额暂停。
+            if (options?.ladderShift) {
+                const shifted = tx
+                    .update(tasks)
+                    .set({
+                        status: 'pending',
+                        model: options.ladderShift.nextModel,
+                        retryCount: currentTask.retryCount ?? 0,
+                        retryAfter: null,
+                        startedAt: null,
+                        finishedAt: null,
+                        resultLog: options.ladderShift.note,
+                    })
+                    .where(and(eq(tasks.id, taskId), eq(tasks.status, 'running')))
+                    .returning()
+                    .get();
+                if (shifted) {
+                    tx.update(taskRuns)
+                        .set({ status: 'failed', finishedAt: new Date() })
+                        .where(and(eq(taskRuns.id, runId), eq(taskRuns.status, 'running')))
+                        .run();
+                    return shifted;
+                }
+            }
 
             // 配额撞限：不消耗重试预算，暂停到限额重置；领取路径仍受闲时窗口闸门约束。
             const quotaPauseMs = quotaRetryAfterMs(log);

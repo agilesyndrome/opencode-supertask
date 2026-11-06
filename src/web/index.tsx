@@ -1031,7 +1031,7 @@ app.get('/board', async (c) => {
         return `<article class="board-card${stuckClass}" data-task-id="${task.id}">
           <div class="board-card-title">#${task.id} ${esc(task.name)}</div>
           <div class="board-card-status"><span class="badge ${disp.badgeClass}">${esc(disp.label)}</span>${disp.subtitle ? `<div class="muted small">${esc(disp.subtitle)}</div>` : ''}</div>
-          <div class="actions task-context"><span class="tag">${esc(task.agent)}</span>${batchId ? `<span class="tag" title="${esc(t(locale, 'template.batchId'))}">${esc(batchId)}</span>` : ''}</div>
+          <div class="actions task-context"><span class="tag">${esc(task.agent)}</span>${task.model && task.model !== 'default' ? `<span class="tag" title="${esc(t(locale, 'table.model'))}">${esc(task.model)}</span>` : ''}${batchId ? `<span class="tag" title="${esc(t(locale, 'template.batchId'))}">${esc(batchId)}</span>` : ''}</div>
           <div class="actions board-card-actions">
             ${primaryActionHtml(locale, task, disp)}
             ${task.runWindow && ['pending', 'failed'].includes(task.status ?? '') ? `<button type="button" class="btn" onclick="runNowTask(${task.id})">${t(locale, 'action.runNow')}</button>` : ''}
@@ -1284,6 +1284,11 @@ app.get('/system', async (c) => {
             <div class="field"><label for="wci">${t(locale, 'system.checkInterval')}</label>${unitInput('wci', config.watchdog.checkIntervalMs / 1000, CONFIG_BOUNDS.watchdogCheckIntervalMs, 1000, t(locale, 'system.seconds'))}</div>
             <div class="field"><label for="wcl">${t(locale, 'system.cleanupInterval')}</label>${unitInput('wcl', config.watchdog.cleanupIntervalMs / 3_600_000, CONFIG_BOUNDS.cleanupIntervalMs, 3_600_000, t(locale, 'system.hours'))}</div>
             <div class="field"><label for="rd">${t(locale, 'system.retentionDays')}</label>${unitInput('rd', config.watchdog.retentionDays, CONFIG_BOUNDS.retentionDays, 1, t(locale, 'system.days'))}</div>
+          </section>
+          <section class="card settings-card reveal-delay-2"><h2 class="settings-title"><span>${icon('tasks')}${t(locale, 'system.modelLadder')}</span></h2>
+            <div class="field"><label for="lp">${t(locale, 'system.ladderPeak')}</label><input id="lp" name="lp" type="text" value="${esc(config.modelLadder.peak.join(', '))}" placeholder="openrouter/a/b-free, openrouter/c/d"></div>
+            <div class="field"><label for="lo">${t(locale, 'system.ladderOffPeak')}</label><input id="lo" name="lo" type="text" value="${esc(config.modelLadder.offPeak.join(', '))}" placeholder="openrouter/a/b-free, openrouter/c/d"></div>
+            <p class="muted small">${t(locale, 'system.ladderHint')}</p>
           </section>
         </div>
         <div class="save-row"><span class="muted small">${configStateText}</span><div class="actions"><button type="submit" class="btn">${t(locale, 'action.save')}</button>${managedRestart ? `<button type="button" class="btn btn-primary" onclick="saveConfig(true,${runningRuns.length})">${t(locale, 'action.saveAndRestart')}</button>` : ''}</div></div>

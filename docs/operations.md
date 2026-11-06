@@ -132,6 +132,8 @@ CLI 帮助、`doctor` 和数据库维护的交互式摘要支持 `auto | zh-CN |
 | `dashboard.port` | `4680` | 1–65535，仅绑定 `127.0.0.1` |
 | `openCodeUi.baseUrl` | （自动发现） | OpenCode Web UI 地址，用于任务详情的“在 OpenCode 中打开”深链；须为 http(s) URL |
 | `openCodeUi.serverKey` | baseUrl 的 origin | 覆盖深链路由中的 server 键（反代场景与 UI 实际连接地址不一致时使用） |
+| `modelLadder.peak` / `modelLadder.offPeak` | `[]` | 模型成本阶梯（由廉到贵，各最多 8 档）；仅作用于未指定模型的任务，空列表不启用 |
+| — | — | 阶梯触发条件：任务失败原因命中模型额度/信用耗尽（OpenRouter 免费额度用尽、402/insufficient credits 等）或既有 usage-limit；触发时切到当前时段梯队的下一档，状态回 `pending`、不消耗重试预算，结果日志带 `model.ladder:` 标记；末档耗尽后回退到配额暂停。显式指定了模型（且不在梯队上）的任务不受影响，维持原有配额暂停 |
 
 建议以完整配置开始：
 

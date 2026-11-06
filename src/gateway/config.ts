@@ -35,6 +35,15 @@ export interface GatewayConfig {
         /** 覆盖路由里的 server key 字符串；缺省用 baseUrl 的 origin。 */
         serverKey?: string;
     };
+    /**
+     * 模型成本阶梯（由廉到贵）：仅作用于未显式选择模型的任务。运行因模型额度/
+     * 信用耗尽失败时，按当前时段的列表切到下一档继续（不消耗重试预算）；耗尽
+     * 最后一档则回退到既有的配额暂停行为。空列表 = 不启用。
+     */
+    modelLadder: {
+        peak: string[];
+        offPeak: string[];
+    };
 }
 
 const DEFAULT_CONFIG: GatewayConfig = {
@@ -61,6 +70,10 @@ const DEFAULT_CONFIG: GatewayConfig = {
         enabled: true,
         port: 4680,
         extraHosts: [],
+    },
+    modelLadder: {
+        peak: [],
+        offPeak: [],
     },
 };
 
@@ -195,7 +208,26 @@ export function validateConfig(input: unknown): GatewayConfig {
             extraHosts: dashboardExtraHostsAt(dashboard, 'extraHosts'),
         },
         openCodeUi: openCodeUiAt(objectAt(root.openCodeUi, 'openCodeUi'), 'openCodeUi'),
+        modelLadder: modelLadderAt(objectAt(root.modelLadder, 'modelLadder'), 'modelLadder'),
     };
+}
+
+/** modelLadder：可选模型列表（peak/offPeak），由廉到贵；条目去空白去重，最多 8 档。 */
+function modelLadderAt(source: Record<string, unknown>, path: string): { peak: string[]; offPeak: string[] } {
+    const list = (key: string): string[] => {
+        const value = source[key];
+        if (value === undefined) return [];
+        if (!Array.isArray(value)) throw new Error(`${path}.${key} 必须是字符串数组`);
+        if (value.length > 8) throw new Error(`${path}.${key} 最多 8 档`);
+        const models: string[] = [];
+        for (const item of value) {
+            if (typeof item !== 'string' || !item.trim()) throw new Error(`${path}.${key} 含空模型条目`);
+            const model = item.trim();
+            if (!models.includes(model)) models.push(model);
+        }
+        return models;
+    };
+    return { peak: list('peak'), offPeak: list('offPeak') };
 }
 
 /** openCodeUi：可选；未配置时运行时回退到本机 opencode 服务发现（service.json）。baseUrl 去尾斜杠。 */
