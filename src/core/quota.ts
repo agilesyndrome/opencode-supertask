@@ -32,8 +32,9 @@ export function isQuotaUsageLimitError(log: string | null | undefined): boolean 
 /**
  * 模型额度/信用耗尽（OpenRouter 免费预算用尽等）。与 provider usage limit 不同：
  * 这类错误没有"重置时刻"，而是引导我们换下一个模型继续跑（模型阶梯）。
+ * 包含 OpenCode Zen 免费档的 FreeUsageLimitError（"Free usage limit reached"）。
  */
-const MODEL_CREDITS_RE = /insufficient credits?|credit balance(?: is)? too low|payment required|free-models-per-day/i;
+const MODEL_CREDITS_RE = /insufficient credits?|credit balance(?: is)? too low|payment required|free-models-per-day|FreeUsageLimitError|Free usage limit reached/i;
 
 export function isModelCreditsExhaustedError(log: string | null | undefined): boolean {
     return typeof log === 'string' && MODEL_CREDITS_RE.test(log);

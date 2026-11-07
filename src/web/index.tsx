@@ -25,6 +25,7 @@ import { TaskRunService } from '@core/services/task-run.service';
 import {
     TaskDeletionConflictError,
     TaskService,
+    DEPENDENCY_DEAD_LOG_PREFIX,
     MANUAL_PAUSE_MARKER,
     type EditableTaskUpdate,
 } from '@core/services/task.service';
@@ -812,7 +813,17 @@ app.get('/', async (c) => {
         return `<a href="${esc(href)}" class="filter-chip ${statusFilter === status ? 'active' : ''}">${label}</a>`;
     }).join('');
 
-    const tasksById = new Map(tasks.map((task) => [task.id, task]));
+    // 级联阻塞行的展示需要看到阻塞源——默认视图排除 done、分页也可能截断，故按标记把阻塞源显式补齐进索引。
+    const tasksById = new Map<number, Task>([...tasks, ...doneTasks].map((task) => [task.id, task]));
+    for (const task of tasks) {
+        if (safeStatus(task.status) !== 'dead_letter') continue;
+        const match = new RegExp(`${DEPENDENCY_DEAD_LOG_PREFIX}(\\d+)`).exec(task.resultLog ?? '');
+        const blockerId = match ? Number(match[1]) : null;
+        if (blockerId !== null && !tasksById.has(blockerId)) {
+            const blocker = await TaskService.getById(blockerId);
+            if (blocker) tasksById.set(blockerId, blocker);
+        }
+    }
     const buildRows = (taskRows: typeof tasks) => taskRows.map((task) => {
         const status = safeStatus(task.status);
         const disp = resolveDisplayStatus(locale, task, Date.now(), { blockerDead: cascadeBlockerStillDead(task, tasksById) });

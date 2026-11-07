@@ -4,7 +4,7 @@ import * as schema from '../src/core/db/schema';
 import type { Task } from '../src/core/db/schema';
 import { setupTestDb } from './helpers/mock-db';
 import { dashboardApp } from '../src/web/index';
-import { TaskService, PAUSED_RETRY_AFTER_SENTINEL } from '../src/core/services/task.service';
+import { TaskService, PAUSED_RETRY_AFTER_SENTINEL, DEPENDENCY_DEAD_LOG_PREFIX } from '../src/core/services/task.service';
 import { resolveDisplayStatus } from '../src/web/ui';
 import { QUOTA_LOG_MARKER } from '../src/core/quota';
 
@@ -179,5 +179,19 @@ describe('队列页 SSR：按原因渲染状态与单按钮', () => {
         const html = await (await dashboardApp.request('/?lang=zh-CN&status=done')).text();
         expect(html).not.toContain('class="panel-completed"');
         expect(html).toContain('已完成一');
+    });
+
+    test('阻塞源已恢复（done）时，默认视图的死信行展示“已恢复”并提供 Retry', async () => {
+        const testDb = setupTestDb();
+        const blocker = await TaskService.add({ name: '恢复了的阻塞源', agent: 'build', prompt: 'p' });
+        await TaskService.done(blocker.id, 'ok');
+        const blocked = await TaskService.add({ name: '曾被阻塞', agent: 'build', prompt: 'p' });
+        await testDb.db.update(testDb.schema.tasks)
+            .set({ status: 'dead_letter', resultLog: `${DEPENDENCY_DEAD_LOG_PREFIX}${blocker.id} 已进入不可恢复终态` })
+            .where(eq(testDb.schema.tasks.id, blocked.id));
+
+        const html = await (await dashboardApp.request('/')).text();
+        expect(html).toContain(`依赖 #${blocker.id} 已恢复，可重试`);
+        expect(html).toContain(`onclick="retryTask(${blocked.id})"`);
     });
 });
